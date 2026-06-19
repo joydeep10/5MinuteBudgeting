@@ -203,6 +203,79 @@ export interface BudgetPlan extends PersistedRecord {
   financialEvents: readonly FinancialEventRecord[];
 }
 
+export interface SavingsGoalAllocation {
+  goalId: EntityId;
+  name: string;
+  status: SavingsGoalStatus;
+  protected: boolean;
+  priority?: number;
+  targetAmount: Money;
+  currentAmount: Money;
+  progressAmount: Money;
+  remainingAmount: Money;
+  suggestedPeriodContribution: Money;
+  plannedPeriodContribution: Money;
+  contributedThisPeriod: Money;
+  remainingProtectedDeduction: Money;
+  overdueIncomplete: boolean;
+}
+
+export function calculateEffectiveAvailableMoney(plan: BudgetPlan): Money {
+  const latestSnapshot = latestBalanceSnapshot(plan.balanceSnapshots);
+  const startingAmount = latestSnapshot?.amount ?? 0;
+  const eventImpact = plan.financialEvents
+    .filter((event) => dateOnlyIsInsidePeriod(event.date, plan.activePeriod))
+    .filter((event) =>
+      latestSnapshot === undefined ? true : eventHappenedAfterSnapshot(event, latestSnapshot),
+    )
+    .reduce((total, event) => total + effectiveAvailableMoneyEventImpact(event), 0);
+
+  return startingAmount + eventImpact;
+}
+
+export function calculateSavingsGoalAllocations(
+  plan: BudgetPlan,
+): SavingsGoalAllocation[] {
+  return plan.plannedRecords.savingsGoals.map((goal) => {
+    const contributedThisPeriod = savingsContributionsForGoal(goal.id, plan);
+    const progressAmount = goal.currentAmount + contributedThisPeriod;
+    const remainingAmount = Math.max(0, goal.targetAmount - progressAmount);
+    const suggestedPeriodContribution =
+      goal.status === "active"
+        ? suggestedSavingsContribution(goal, plan.activePeriod)
+        : 0;
+    const plannedPeriodContribution =
+      goal.status === "active"
+        ? goal.periodContributionOverride ?? suggestedPeriodContribution
+        : 0;
+    const remainingProtectedDeduction =
+      goal.status === "active" && goal.protected
+        ? Math.max(0, plannedPeriodContribution - contributedThisPeriod)
+        : 0;
+
+    return {
+      goalId: goal.id,
+      name: goal.name,
+      status: goal.status,
+      protected: goal.protected,
+      priority: goal.priority,
+      targetAmount: goal.targetAmount,
+      currentAmount: goal.currentAmount,
+      progressAmount,
+      remainingAmount,
+      suggestedPeriodContribution,
+      plannedPeriodContribution,
+      contributedThisPeriod,
+      remainingProtectedDeduction,
+      overdueIncomplete: savingsGoalIsOverdueIncomplete(
+        goal,
+        remainingAmount,
+        plan.activePeriod,
+      ),
+    };
+  });
+}
+
 export function parseDateOnly(date: DateOnly): Date {
   const [year, month, day] = date.split("-").map(Number);
 
@@ -452,6 +525,119 @@ function commitmentOccurrencePaidAmount(
         event.occurrenceDate === occurrenceDate,
     )
     .reduce((total, event) => total + event.amount, 0);
+}
+
+function latestBalanceSnapshot(
+  snapshots: readonly BalanceSnapshot[],
+): BalanceSnapshot | undefined {
+  return [...snapshots].sort(compareBalanceSnapshots).at(-1);
+}
+
+function eventHappenedAfterSnapshot(
+  event: FinancialEventRecord,
+  snapshot: BalanceSnapshot,
+): boolean {
+  const dateComparison = compareDateOnly(event.date, snapshot.date);
+
+  if (dateComparison !== 0) {
+    return dateComparison > 0;
+  }
+
+  return compareTimestamp(event.createdAt, snapshot.createdAt) > 0;
+}
+
+function dateOnlyIsInsidePeriod(
+  date: DateOnly,
+  period: ActiveBudgetPeriod,
+): boolean {
+  return (
+    compareDateOnly(date, period.startDate) >= 0 &&
+    compareDateOnly(date, period.endDate) <= 0
+  );
+}
+
+function savingsContributionsForGoal(
+  goalId: EntityId,
+  plan: BudgetPlan,
+): Money {
+  return plan.financialEvents
+    .filter(
+      (event) =>
+        event.kind === "savings-contribution" &&
+        event.savingsGoalId === goalId &&
+        dateOnlyIsInsidePeriod(event.date, plan.activePeriod),
+    )
+    .reduce((total, event) => total + event.amount, 0);
+}
+
+function suggestedSavingsContribution(
+  goal: SavingsGoal,
+  period: ActiveBudgetPeriod,
+): Money {
+  if (goal.targetDate === undefined) {
+    return 0;
+  }
+
+  const remainingAmount = Math.max(0, goal.targetAmount - goal.currentAmount);
+  const periodLength = inclusiveDaysRemaining(period.startDate, period.endDate);
+  const remainingPeriodLength = inclusiveDaysRemaining(
+    period.endDate,
+    goal.targetDate,
+  );
+  const remainingPeriods = Math.max(
+    1,
+    Math.ceil(remainingPeriodLength / periodLength),
+  );
+
+  return Math.ceil(remainingAmount / remainingPeriods);
+}
+
+function savingsGoalIsOverdueIncomplete(
+  goal: SavingsGoal,
+  remainingAmount: Money,
+  period: ActiveBudgetPeriod,
+): boolean {
+  return (
+    goal.status === "active" &&
+    goal.targetDate !== undefined &&
+    remainingAmount > 0 &&
+    compareDateOnly(goal.targetDate, period.startDate) < 0
+  );
+}
+
+function effectiveAvailableMoneyEventImpact(
+  event: FinancialEventRecord,
+): Money {
+  if (
+    event.kind === "spending" ||
+    event.kind === "commitment-payment" ||
+    event.kind === "savings-contribution"
+  ) {
+    return -event.amount;
+  }
+
+  if (event.kind === "income-received") {
+    return event.amount;
+  }
+
+  return 0;
+}
+
+function compareBalanceSnapshots(
+  left: BalanceSnapshot,
+  right: BalanceSnapshot,
+): number {
+  const dateComparison = compareDateOnly(left.date, right.date);
+
+  if (dateComparison !== 0) {
+    return dateComparison;
+  }
+
+  return compareTimestamp(left.createdAt, right.createdAt);
+}
+
+function compareTimestamp(left: Timestamp, right: Timestamp): number {
+  return Date.parse(left) - Date.parse(right);
 }
 
 function earlierDateOnly(left: DateOnly, right?: DateOnly): DateOnly {
