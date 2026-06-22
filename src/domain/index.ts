@@ -192,6 +192,16 @@ export interface FinancialEventRecord extends PersistedRecord {
   note?: string;
 }
 
+export interface PeriodSnapshot extends PersistedRecord {
+  period: ActiveBudgetPeriod;
+  startingAvailableMoney: Money;
+  endingEffectiveAvailableMoney: Money;
+  totalSpending: Money;
+  totalCommitmentsPaid: Money;
+  totalSavingsContributions: Money;
+  finalHealthStatus: BudgetHealthStatus;
+}
+
 export interface BudgetPlan extends PersistedRecord {
   schemaVersion: BudgetPlanSchemaVersion;
   mode: BudgetMode;
@@ -201,6 +211,7 @@ export interface BudgetPlan extends PersistedRecord {
   plannedRecords: PlannedRecords;
   balanceSnapshots: readonly BalanceSnapshot[];
   financialEvents: readonly FinancialEventRecord[];
+  periodSnapshots?: readonly PeriodSnapshot[];
 }
 
 export interface SavingsGoalAllocation {
