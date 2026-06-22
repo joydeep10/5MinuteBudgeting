@@ -249,17 +249,212 @@ export interface SafeToSpendBreakdown {
   projectedIncome: Money;
 }
 
+export type BudgetWarningSeverity = "guidance" | "warning" | "critical";
+
+export type BudgetWarningCode =
+  | "critical-shortfall"
+  | "overdue-commitment"
+  | "commitment-due-today"
+  | "overdue-savings-goal"
+  | "category-overage";
+
+export interface BudgetWarning {
+  id: string;
+  severity: BudgetWarningSeverity;
+  code: BudgetWarningCode;
+  metadata: Record<string, unknown>;
+}
+
 export interface SafeToSpendResult {
   confirmed: SafeToSpendMetrics;
   projected: SafeToSpendMetrics;
   breakdown: SafeToSpendBreakdown;
   health: BudgetHealthStatus;
+  warnings: readonly BudgetWarning[];
 }
 
 export interface CalculateSafeToSpendInput {
   plan: BudgetPlan;
   today: DateOnly;
   commitmentAmountOverrides?: readonly CommitmentAmountOverride[];
+}
+
+export interface OneTimeSpendScenario {
+  kind: "one-time-spend";
+  id: EntityId;
+  date: DateOnly;
+  amount: Money;
+  categoryId?: EntityId;
+  note?: string;
+}
+
+export interface AvailableMoneyAdjustmentScenario {
+  kind: "available-money-adjustment";
+  id: EntityId;
+  date: DateOnly;
+  amountDelta: Money;
+  note?: string;
+}
+
+export interface CommitmentAddScenario {
+  kind: "commitment-add";
+  commitment: CommitmentTemplate;
+}
+
+export interface CommitmentRemoveScenario {
+  kind: "commitment-remove";
+  commitmentTemplateId: EntityId;
+}
+
+export interface CommitmentChangeScenario {
+  kind: "commitment-change";
+  commitmentTemplateId: EntityId;
+  changes: Partial<
+    Pick<
+      CommitmentTemplate,
+      "name" | "kind" | "amount" | "active" | "startsOn" | "endsOn" | "recurrence" | "categoryId"
+    >
+  >;
+}
+
+export interface BufferChangeScenario {
+  kind: "buffer-change";
+  fixedBuffer: Money;
+}
+
+export interface SavingsGoalChangeScenario {
+  kind: "savings-goal-change";
+  savingsGoalId: EntityId;
+  status?: SavingsGoalStatus;
+  protected?: boolean;
+}
+
+export type BudgetSimulationScenario =
+  | OneTimeSpendScenario
+  | AvailableMoneyAdjustmentScenario
+  | CommitmentAddScenario
+  | CommitmentRemoveScenario
+  | CommitmentChangeScenario
+  | BufferChangeScenario
+  | SavingsGoalChangeScenario;
+
+export interface BudgetSimulationDifference {
+  rawSafePool: Money;
+  safeThisPeriod: Money;
+  safeToday: Money;
+  safeThisWeek: Money;
+  effectiveAvailableMoney: Money;
+  unpaidCommitments: Money;
+  protectedSavings: Money;
+  fixedBuffer: Money;
+  projectedIncome: Money;
+}
+
+export interface BudgetSimulationResult {
+  current: SafeToSpendResult;
+  simulated: SafeToSpendResult;
+  difference: BudgetSimulationDifference;
+}
+
+export interface SimulateBudgetPlanInput {
+  plan: BudgetPlan;
+  today: DateOnly;
+  scenarios: readonly BudgetSimulationScenario[];
+}
+
+export interface ExportSnapshotMetrics {
+  confirmed: SafeToSpendMetrics;
+  projected: SafeToSpendMetrics;
+  health: BudgetHealthStatus;
+  warnings: readonly BudgetWarning[];
+}
+
+export interface ExportSnapshotSummary {
+  effectiveAvailableMoney: Money;
+  unpaidCommitments: Money;
+  protectedSavings: Money;
+  fixedBuffer: Money;
+  projectedIncome: Money;
+}
+
+export interface ExportLedgerRow {
+  id: EntityId;
+  date: DateOnly;
+  rowType: "financial-event" | "commitment-occurrence";
+  label: string;
+  amount: Money;
+  categoryId?: EntityId;
+  relatedRecordId?: EntityId;
+}
+
+export interface ExportSnapshotReport {
+  commitments: readonly CommitmentOccurrence[];
+  spendingSummaries: readonly CategorySummary[];
+  savingsSummaries: readonly SavingsGoalAllocation[];
+  ledgerRows: readonly ExportLedgerRow[];
+}
+
+export interface CategorySpendingChartPoint {
+  categoryId: EntityId;
+  label: string;
+  value: Money;
+  limit?: Money;
+  overageAmount: Money;
+}
+
+export interface CommitmentDateChartPoint {
+  date: DateOnly;
+  label: string;
+  value: Money;
+  remainingUnpaidAmount: Money;
+}
+
+export interface SavingsProgressChartPoint {
+  goalId: EntityId;
+  label: string;
+  currentAmount: Money;
+  targetAmount: Money;
+  progressAmount: Money;
+  remainingAmount: Money;
+}
+
+export interface BudgetRunwayChartPoint {
+  label: "today" | "this-week" | "this-period";
+  value: Money;
+}
+
+export interface HealthContextChartPoint {
+  status: BudgetHealthStatus;
+  rawSafePool: Money;
+  shortfallAmount: Money;
+}
+
+export interface ExportSnapshotCharts {
+  categorySpending: readonly CategorySpendingChartPoint[];
+  commitmentsByDate: readonly CommitmentDateChartPoint[];
+  savingsProgress: readonly SavingsProgressChartPoint[];
+  budgetRunway: readonly BudgetRunwayChartPoint[];
+  healthContext: readonly HealthContextChartPoint[];
+}
+
+export interface ExportSnapshot {
+  planId: EntityId;
+  asOfDate: DateOnly;
+  activePeriod: ActiveBudgetPeriod;
+  currency: CurrencyMetadata;
+  metrics: ExportSnapshotMetrics;
+  summary: ExportSnapshotSummary;
+  report: ExportSnapshotReport;
+  charts: ExportSnapshotCharts;
+}
+
+export interface BuildExportSnapshotInput {
+  plan: BudgetPlan;
+  today: DateOnly;
+  calculation: SafeToSpendResult;
+  commitmentOccurrences: readonly CommitmentOccurrence[];
+  categorySummaries: readonly CategorySummary[];
+  savingsGoalAllocations: readonly SavingsGoalAllocation[];
 }
 
 export function calculateEffectiveAvailableMoney(plan: BudgetPlan): Money {
@@ -289,7 +484,8 @@ export function calculateSafeToSpend({
     amountOverrides: commitmentAmountOverrides,
   });
   const unpaidCommitments = unpaidCommitmentDeduction(commitmentOccurrences);
-  const protectedSavings = calculateSavingsGoalAllocations(plan).reduce(
+  const savingsGoalAllocations = calculateSavingsGoalAllocations(plan);
+  const protectedSavings = savingsGoalAllocations.reduce(
     (total, allocation) => total + allocation.remainingProtectedDeduction,
     0,
   );
@@ -320,6 +516,114 @@ export function calculateSafeToSpend({
       projectedIncome,
     },
     health: budgetHealth(rawSafePool, effectiveAvailableMoney, plan.fixedBuffer),
+    warnings: generateBudgetWarnings(
+      plan,
+      rawSafePool,
+      commitmentOccurrences,
+      savingsGoalAllocations,
+      calculateCategorySummaries(plan),
+    ),
+  };
+}
+
+export function simulateBudgetPlan({
+  plan,
+  today,
+  scenarios,
+}: SimulateBudgetPlanInput): BudgetSimulationResult {
+  const current = calculateSafeToSpend({ plan, today });
+  const simulatedPlan = scenarios.reduce(
+    (workingPlan, scenario) => applySimulationScenario(workingPlan, scenario),
+    cloneBudgetPlan(plan),
+  );
+  const simulated = calculateSafeToSpend({ plan: simulatedPlan, today });
+
+  return {
+    current,
+    simulated,
+    difference: calculateSimulationDifference(current, simulated),
+  };
+}
+
+export function buildExportSnapshot({
+  plan,
+  today,
+  calculation,
+  commitmentOccurrences,
+  categorySummaries,
+  savingsGoalAllocations,
+}: BuildExportSnapshotInput): ExportSnapshot {
+  return {
+    planId: plan.id,
+    asOfDate: today,
+    activePeriod: { ...plan.activePeriod },
+    currency: { ...plan.currency },
+    metrics: {
+      confirmed: calculation.confirmed,
+      projected: calculation.projected,
+      health: calculation.health,
+      warnings: calculation.warnings,
+    },
+    summary: {
+      effectiveAvailableMoney: calculation.breakdown.effectiveAvailableMoney,
+      unpaidCommitments: calculation.breakdown.unpaidCommitments,
+      protectedSavings: calculation.breakdown.protectedSavings,
+      fixedBuffer: calculation.breakdown.fixedBuffer,
+      projectedIncome: calculation.breakdown.projectedIncome,
+    },
+    report: {
+      commitments: commitmentOccurrences,
+      spendingSummaries: categorySummaries,
+      savingsSummaries: savingsGoalAllocations,
+      ledgerRows: [
+        ...plan.financialEvents.map(financialEventLedgerRow),
+        ...commitmentOccurrences.map(commitmentOccurrenceLedgerRow),
+      ],
+    },
+    charts: {
+      categorySpending: categorySummaries.map((summary) => ({
+        categoryId: summary.categoryId,
+        label: summary.categoryName,
+        value: summary.spentAmount,
+        limit: summary.periodLimit,
+        overageAmount: summary.overageAmount,
+      })),
+      commitmentsByDate: commitmentOccurrences.map((occurrence) => ({
+        date: occurrence.date,
+        label: occurrence.name,
+        value: occurrence.amount,
+        remainingUnpaidAmount: occurrence.remainingUnpaidAmount,
+      })),
+      savingsProgress: savingsGoalAllocations.map((allocation) => ({
+        goalId: allocation.goalId,
+        label: allocation.name,
+        currentAmount: allocation.currentAmount,
+        targetAmount: allocation.targetAmount,
+        progressAmount: allocation.progressAmount,
+        remainingAmount: allocation.remainingAmount,
+      })),
+      budgetRunway: [
+        {
+          label: "today",
+          value: calculation.confirmed.safeToday,
+        },
+        {
+          label: "this-week",
+          value: calculation.confirmed.safeThisWeek,
+        },
+        {
+          label: "this-period",
+          value: calculation.confirmed.safeThisPeriod,
+        },
+      ],
+      healthContext: [
+        {
+          status: calculation.health,
+          rawSafePool: calculation.confirmed.rawSafePool,
+          shortfallAmount: Math.max(0, -calculation.confirmed.rawSafePool),
+        },
+      ],
+    },
   };
 }
 
@@ -588,6 +892,199 @@ export function unpaidCommitmentDeduction(
   );
 }
 
+function cloneBudgetPlan(plan: BudgetPlan): BudgetPlan {
+  return {
+    ...plan,
+    currency: { ...plan.currency },
+    activePeriod: { ...plan.activePeriod },
+    plannedRecords: {
+      categories: [...plan.plannedRecords.categories],
+      incomeTemplates: [...plan.plannedRecords.incomeTemplates],
+      commitmentTemplates: [...plan.plannedRecords.commitmentTemplates],
+      savingsGoals: [...plan.plannedRecords.savingsGoals],
+      flexibleCategoryGuidance: [
+        ...plan.plannedRecords.flexibleCategoryGuidance,
+      ],
+    },
+    balanceSnapshots: [...plan.balanceSnapshots],
+    financialEvents: [...plan.financialEvents],
+  };
+}
+
+function applySimulationScenario(
+  plan: BudgetPlan,
+  scenario: BudgetSimulationScenario,
+): BudgetPlan {
+  if (scenario.kind === "one-time-spend") {
+    return {
+      ...plan,
+      financialEvents: [
+        ...plan.financialEvents,
+        {
+          id: scenario.id,
+          createdAt: "simulation",
+          updatedAt: "simulation",
+          date: scenario.date,
+          kind: "spending",
+          amount: scenario.amount,
+          categoryId: scenario.categoryId,
+          note: scenario.note,
+        },
+      ],
+    };
+  }
+
+  if (scenario.kind === "available-money-adjustment") {
+    return {
+      ...plan,
+      financialEvents: [
+        ...plan.financialEvents,
+        {
+          id: scenario.id,
+          createdAt: "simulation",
+          updatedAt: "simulation",
+          date: scenario.date,
+          kind: scenario.amountDelta >= 0 ? "income-received" : "spending",
+          amount: Math.abs(scenario.amountDelta),
+          note: scenario.note,
+        },
+      ],
+    };
+  }
+
+  if (scenario.kind === "commitment-add") {
+    return {
+      ...plan,
+      plannedRecords: {
+        ...plan.plannedRecords,
+        commitmentTemplates: [
+          ...plan.plannedRecords.commitmentTemplates,
+          scenario.commitment,
+        ],
+      },
+    };
+  }
+
+  if (scenario.kind === "commitment-remove") {
+    return {
+      ...plan,
+      plannedRecords: {
+        ...plan.plannedRecords,
+        commitmentTemplates: plan.plannedRecords.commitmentTemplates.filter(
+          (commitment) => commitment.id !== scenario.commitmentTemplateId,
+        ),
+      },
+    };
+  }
+
+  if (scenario.kind === "commitment-change") {
+    return {
+      ...plan,
+      plannedRecords: {
+        ...plan.plannedRecords,
+        commitmentTemplates: plan.plannedRecords.commitmentTemplates.map(
+          (commitment) =>
+            commitment.id === scenario.commitmentTemplateId
+              ? { ...commitment, ...scenario.changes }
+              : commitment,
+        ),
+      },
+    };
+  }
+
+  if (scenario.kind === "buffer-change") {
+    return {
+      ...plan,
+      fixedBuffer: scenario.fixedBuffer,
+    };
+  }
+
+  if (scenario.kind === "savings-goal-change") {
+    return {
+      ...plan,
+      plannedRecords: {
+        ...plan.plannedRecords,
+        savingsGoals: plan.plannedRecords.savingsGoals.map((goal) =>
+          goal.id === scenario.savingsGoalId
+            ? {
+                ...goal,
+                status: scenario.status ?? goal.status,
+                protected: scenario.protected ?? goal.protected,
+              }
+            : goal,
+        ),
+      },
+    };
+  }
+
+  return plan;
+}
+
+function calculateSimulationDifference(
+  current: SafeToSpendResult,
+  simulated: SafeToSpendResult,
+): BudgetSimulationDifference {
+  return {
+    rawSafePool:
+      simulated.confirmed.rawSafePool - current.confirmed.rawSafePool,
+    safeThisPeriod:
+      simulated.confirmed.safeThisPeriod - current.confirmed.safeThisPeriod,
+    safeToday: simulated.confirmed.safeToday - current.confirmed.safeToday,
+    safeThisWeek:
+      simulated.confirmed.safeThisWeek - current.confirmed.safeThisWeek,
+    effectiveAvailableMoney:
+      simulated.breakdown.effectiveAvailableMoney -
+      current.breakdown.effectiveAvailableMoney,
+    unpaidCommitments:
+      simulated.breakdown.unpaidCommitments -
+      current.breakdown.unpaidCommitments,
+    protectedSavings:
+      simulated.breakdown.protectedSavings -
+      current.breakdown.protectedSavings,
+    fixedBuffer: simulated.breakdown.fixedBuffer - current.breakdown.fixedBuffer,
+    projectedIncome:
+      simulated.breakdown.projectedIncome - current.breakdown.projectedIncome,
+  };
+}
+
+function financialEventLedgerRow(event: FinancialEventRecord): ExportLedgerRow {
+  return {
+    id: event.id,
+    date: event.date,
+    rowType: "financial-event",
+    label: event.note ?? event.kind,
+    amount: financialEventSignedAmount(event),
+    categoryId: event.categoryId,
+    relatedRecordId:
+      event.commitmentTemplateId ?? event.savingsGoalId ?? event.incomeTemplateId,
+  };
+}
+
+function commitmentOccurrenceLedgerRow(
+  occurrence: CommitmentOccurrence,
+): ExportLedgerRow {
+  return {
+    id: occurrence.id,
+    date: occurrence.date,
+    rowType: "commitment-occurrence",
+    label: occurrence.name,
+    amount: -occurrence.remainingUnpaidAmount,
+    relatedRecordId: occurrence.templateId,
+  };
+}
+
+function financialEventSignedAmount(event: FinancialEventRecord): Money {
+  if (
+    event.kind === "spending" ||
+    event.kind === "commitment-payment" ||
+    event.kind === "savings-contribution"
+  ) {
+    return -event.amount;
+  }
+
+  return event.amount;
+}
+
 function calculateSafeToSpendMetrics(
   rawSafePool: Money,
   today: DateOnly,
@@ -631,6 +1128,84 @@ function budgetHealth(
   }
 
   return "safe";
+}
+
+function generateBudgetWarnings(
+  plan: BudgetPlan,
+  rawSafePool: Money,
+  commitmentOccurrences: readonly CommitmentOccurrence[],
+  savingsGoalAllocations: readonly SavingsGoalAllocation[],
+  categorySummaries: readonly CategorySummary[],
+): BudgetWarning[] {
+  if (rawSafePool < 0) {
+    return [
+      {
+        id: `critical-shortfall:${plan.id}`,
+        severity: "critical",
+        code: "critical-shortfall",
+        metadata: {
+          rawSafePool,
+          shortfallAmount: Math.abs(rawSafePool),
+        },
+      },
+    ];
+  }
+
+  const commitmentWarnings: BudgetWarning[] = commitmentOccurrences.flatMap((occurrence) => {
+    if (occurrence.paid || occurrence.timing === "future") {
+      return [];
+    }
+
+    const code =
+      occurrence.timing === "overdue"
+        ? "overdue-commitment"
+        : "commitment-due-today";
+
+    return [
+      {
+        id: `${code}:${occurrence.templateId}:${occurrence.date}`,
+        severity: occurrence.timing === "overdue" ? "critical" : "warning",
+        code,
+        metadata: {
+          commitmentTemplateId: occurrence.templateId,
+          occurrenceDate: occurrence.date,
+          kind: occurrence.kind,
+          remainingUnpaidAmount: occurrence.remainingUnpaidAmount,
+        },
+      },
+    ];
+  });
+
+  const savingsWarnings: BudgetWarning[] = savingsGoalAllocations
+    .filter((allocation) => allocation.overdueIncomplete)
+    .map((allocation) => ({
+      id: `overdue-savings-goal:${allocation.goalId}`,
+      severity: "warning" as const,
+      code: "overdue-savings-goal" as const,
+      metadata: {
+        savingsGoalId: allocation.goalId,
+        remainingAmount: allocation.remainingAmount,
+        targetDate: plan.plannedRecords.savingsGoals.find(
+          (goal) => goal.id === allocation.goalId,
+        )?.targetDate,
+      },
+    }));
+
+  const categoryWarnings: BudgetWarning[] = categorySummaries
+    .filter((summary) => summary.overageAmount > 0)
+    .map((summary) => ({
+      id: `category-overage:${summary.categoryId}`,
+      severity: "guidance" as const,
+      code: "category-overage" as const,
+      metadata: {
+        categoryId: summary.categoryId,
+        spentAmount: summary.spentAmount,
+        periodLimit: summary.periodLimit,
+        overageAmount: summary.overageAmount,
+      },
+    }));
+
+  return [...commitmentWarnings, ...savingsWarnings, ...categoryWarnings];
 }
 
 function createOccurrence(
