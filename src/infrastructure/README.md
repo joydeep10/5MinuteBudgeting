@@ -4,7 +4,7 @@ The infrastructure layer adapts browser and platform capabilities to the applica
 
 ## Belongs here
 
-- Future IndexedDB persistence adapters.
+- IndexedDB persistence adapters for local BudgetPlan storage.
 - Lightweight preferences storage if localStorage is needed.
 - ID generation, clock adapters, import/export file handling, and notification adapters.
 - Browser API wrappers used through application-layer interfaces.
