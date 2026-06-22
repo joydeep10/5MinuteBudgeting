@@ -220,6 +220,48 @@ export interface SavingsGoalAllocation {
   overdueIncomplete: boolean;
 }
 
+export interface CategorySummary {
+  categoryId: EntityId;
+  categoryName: string;
+  categoryKind: CategoryKind;
+  spentAmount: Money;
+  periodLimit?: Money;
+  reserved: boolean;
+  remainingGuidanceAmount?: Money;
+  overageAmount: Money;
+  chartValue: Money;
+}
+
+export type BudgetHealthStatus = "safe" | "tight" | "risky" | "overspending";
+
+export interface SafeToSpendMetrics {
+  rawSafePool: Money;
+  safeThisPeriod: Money;
+  safeToday: Money;
+  safeThisWeek: Money;
+}
+
+export interface SafeToSpendBreakdown {
+  effectiveAvailableMoney: Money;
+  unpaidCommitments: Money;
+  protectedSavings: Money;
+  fixedBuffer: Money;
+  projectedIncome: Money;
+}
+
+export interface SafeToSpendResult {
+  confirmed: SafeToSpendMetrics;
+  projected: SafeToSpendMetrics;
+  breakdown: SafeToSpendBreakdown;
+  health: BudgetHealthStatus;
+}
+
+export interface CalculateSafeToSpendInput {
+  plan: BudgetPlan;
+  today: DateOnly;
+  commitmentAmountOverrides?: readonly CommitmentAmountOverride[];
+}
+
 export function calculateEffectiveAvailableMoney(plan: BudgetPlan): Money {
   const latestSnapshot = latestBalanceSnapshot(plan.balanceSnapshots);
   const startingAmount = latestSnapshot?.amount ?? 0;
@@ -231,6 +273,86 @@ export function calculateEffectiveAvailableMoney(plan: BudgetPlan): Money {
     .reduce((total, event) => total + effectiveAvailableMoneyEventImpact(event), 0);
 
   return startingAmount + eventImpact;
+}
+
+export function calculateSafeToSpend({
+  plan,
+  today,
+  commitmentAmountOverrides = [],
+}: CalculateSafeToSpendInput): SafeToSpendResult {
+  const effectiveAvailableMoney = calculateEffectiveAvailableMoney(plan);
+  const commitmentOccurrences = generateCommitmentOccurrences({
+    commitments: plan.plannedRecords.commitmentTemplates,
+    period: plan.activePeriod,
+    today,
+    financialEvents: plan.financialEvents,
+    amountOverrides: commitmentAmountOverrides,
+  });
+  const unpaidCommitments = unpaidCommitmentDeduction(commitmentOccurrences);
+  const protectedSavings = calculateSavingsGoalAllocations(plan).reduce(
+    (total, allocation) => total + allocation.remainingProtectedDeduction,
+    0,
+  );
+  const rawSafePool =
+    effectiveAvailableMoney -
+    unpaidCommitments -
+    protectedSavings -
+    plan.fixedBuffer;
+  const projectedIncome = projectedIncomeThroughPeriodEnd(plan, today);
+  const confirmed = calculateSafeToSpendMetrics(
+    rawSafePool,
+    today,
+    plan.activePeriod,
+  );
+
+  return {
+    confirmed,
+    projected: calculateSafeToSpendMetrics(
+      rawSafePool + projectedIncome,
+      today,
+      plan.activePeriod,
+    ),
+    breakdown: {
+      effectiveAvailableMoney,
+      unpaidCommitments,
+      protectedSavings,
+      fixedBuffer: plan.fixedBuffer,
+      projectedIncome,
+    },
+    health: budgetHealth(rawSafePool, effectiveAvailableMoney, plan.fixedBuffer),
+  };
+}
+
+export function calculateCategorySummaries(plan: BudgetPlan): CategorySummary[] {
+  return plan.plannedRecords.categories
+    .filter((category) => !category.archived)
+    .map((category) => {
+      const spentAmount = spendingForCategory(category.id, plan);
+      const guidance = plan.plannedRecords.flexibleCategoryGuidance.find(
+        (record) => record.categoryId === category.id,
+      );
+      const overageAmount =
+        guidance === undefined ? 0 : Math.max(0, spentAmount - guidance.periodLimit);
+
+      return {
+        categoryId: category.id,
+        categoryName: category.name,
+        categoryKind: category.kind,
+        spentAmount,
+        periodLimit: guidance?.periodLimit,
+        reserved: guidance?.reserved ?? false,
+        remainingGuidanceAmount:
+          guidance === undefined
+            ? undefined
+            : Math.max(0, guidance.periodLimit - spentAmount),
+        overageAmount,
+        chartValue: spentAmount,
+      };
+    })
+    .filter(
+      (summary) =>
+        summary.spentAmount > 0 || summary.periodLimit !== undefined,
+    );
 }
 
 export function calculateSavingsGoalAllocations(
@@ -466,6 +588,51 @@ export function unpaidCommitmentDeduction(
   );
 }
 
+function calculateSafeToSpendMetrics(
+  rawSafePool: Money,
+  today: DateOnly,
+  activePeriod: ActiveBudgetPeriod,
+): SafeToSpendMetrics {
+  const safeThisPeriod = Math.max(0, rawSafePool);
+  const daysRemaining = inclusiveDaysRemaining(today, activePeriod.endDate);
+  const safeToday = Math.floor(safeThisPeriod / daysRemaining);
+  const weekDays = Math.min(7, daysRemaining);
+
+  return {
+    rawSafePool,
+    safeThisPeriod,
+    safeToday,
+    safeThisWeek: safeToday * weekDays,
+  };
+}
+
+function budgetHealth(
+  rawSafePool: Money,
+  effectiveAvailableMoney: Money,
+  fixedBuffer: Money,
+): BudgetHealthStatus {
+  if (rawSafePool < 0) {
+    return "overspending";
+  }
+
+  if (fixedBuffer > 0 && rawSafePool < fixedBuffer) {
+    return "risky";
+  }
+
+  const ratio =
+    effectiveAvailableMoney <= 0 ? 0 : rawSafePool / effectiveAvailableMoney;
+
+  if (ratio < 0.05) {
+    return "risky";
+  }
+
+  if (ratio < 0.3) {
+    return "tight";
+  }
+
+  return "safe";
+}
+
 function createOccurrence(
   templateId: EntityId,
   date: DateOnly,
@@ -568,6 +735,40 @@ function savingsContributionsForGoal(
         dateOnlyIsInsidePeriod(event.date, plan.activePeriod),
     )
     .reduce((total, event) => total + event.amount, 0);
+}
+
+function spendingForCategory(categoryId: EntityId, plan: BudgetPlan): Money {
+  return plan.financialEvents
+    .filter(
+      (event) =>
+        event.kind === "spending" &&
+        event.categoryId === categoryId &&
+        dateOnlyIsInsidePeriod(event.date, plan.activePeriod),
+    )
+    .reduce((total, event) => total + event.amount, 0);
+}
+
+function projectedIncomeThroughPeriodEnd(
+  plan: BudgetPlan,
+  today: DateOnly,
+): Money {
+  const projectionPeriod = {
+    startDate: laterDateOnly(today, plan.activePeriod.startDate),
+    endDate: plan.activePeriod.endDate,
+  };
+
+  return plan.plannedRecords.incomeTemplates
+    .filter((template) => template.active && template.includeInProjection)
+    .flatMap((template) =>
+      generateRecurrenceOccurrences({
+        templateId: template.id,
+        startsOn: template.startsOn,
+        endsOn: template.endsOn,
+        recurrence: template.recurrence,
+        period: projectionPeriod,
+      }).map(() => template.amount),
+    )
+    .reduce((total, amount) => total + amount, 0);
 }
 
 function suggestedSavingsContribution(
