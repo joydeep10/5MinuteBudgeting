@@ -1,9 +1,33 @@
+import { useState } from "react";
+
+import type { ApplicationServices } from "../application";
+import { calculateSafeToSpend } from "../domain";
+import type { BudgetMode, BudgetPlan, DateOnly, Money } from "../domain";
+import {
+  completeSetupWizard,
+  estimateSetupWizardResult,
+  formatMoney,
+} from "../features/setupWizard";
+import type {
+  CommitmentShortcut,
+  SetupWizardSubmission,
+} from "../features/setupWizard";
+import type { BudgetPlanRepository } from "../infrastructure";
+
+export type AppView = "landing" | "setup" | "dashboard";
+
 export interface AppProps {
   hasSavedBudget?: boolean;
+  initialView?: AppView;
+  initialPlan?: BudgetPlan;
+  initialSetupSubmission?: Partial<SetupWizardSubmission>;
+  repository?: BudgetPlanRepository;
+  services?: ApplicationServices;
+  today?: DateOnly;
 }
 
 export interface LandingResumeSource {
-  loadActivePlan: () => Promise<unknown | undefined>;
+  loadActivePlan: () => Promise<BudgetPlan | undefined>;
 }
 
 export async function loadLandingResumeState(
@@ -13,10 +37,46 @@ export async function loadLandingResumeState(
 
   return {
     hasSavedBudget: savedBudget !== undefined,
+    initialPlan: savedBudget,
   };
 }
 
-export function App({ hasSavedBudget = false }: AppProps) {
+export function App({
+  hasSavedBudget = false,
+  initialView = "landing",
+  initialPlan,
+  initialSetupSubmission,
+  repository,
+  services = createBrowserApplicationServices(),
+  today = currentDateOnly(),
+}: AppProps) {
+  const [view, setView] = useState<AppView>(initialView);
+  const [plan, setPlan] = useState<BudgetPlan | undefined>(initialPlan);
+
+  if (view === "setup") {
+    return (
+      <SetupWizard
+        initialSubmission={initialSetupSubmission}
+        repository={repository}
+        services={services}
+        today={today}
+        onComplete={(createdPlan) => {
+          setPlan(createdPlan);
+          setView("dashboard");
+        }}
+        onBack={() => setView("landing")}
+      />
+    );
+  }
+
+  if (view === "dashboard") {
+    return plan === undefined ? (
+      <EmptyDashboard onStartBudgeting={() => setView("setup")} />
+    ) : (
+      <Dashboard plan={plan} today={today} />
+    );
+  }
+
   return (
     <main className="app-shell">
       <section className="hero-section" aria-labelledby="app-title">
@@ -27,7 +87,11 @@ export function App({ hasSavedBudget = false }: AppProps) {
             A calm, browser-local budget that protects bills, savings, and your
             buffer before showing what you can actually use.
           </p>
-          <LandingActions hasSavedBudget={hasSavedBudget} />
+          <LandingActions
+            hasSavedBudget={hasSavedBudget}
+            onOpenBudget={() => setView("dashboard")}
+            onStartBudgeting={() => setView("setup")}
+          />
           {hasSavedBudget ? (
             <p className="restart-note" id="restart-protection">
               You will confirm before replacing this browser budget.
@@ -91,7 +155,12 @@ export function App({ hasSavedBudget = false }: AppProps) {
           <p className="section-kicker">Start your 5-minute budget</p>
           <h2 id="final-cta-title">Find the number you can act on today.</h2>
         </div>
-        <LandingActions hasSavedBudget={hasSavedBudget} compact />
+        <LandingActions
+          hasSavedBudget={hasSavedBudget}
+          onOpenBudget={() => setView("dashboard")}
+          onStartBudgeting={() => setView("setup")}
+          compact
+        />
       </section>
     </main>
   );
@@ -99,40 +168,545 @@ export function App({ hasSavedBudget = false }: AppProps) {
 
 interface LandingActionsProps {
   hasSavedBudget: boolean;
+  onOpenBudget: () => void;
+  onStartBudgeting: () => void;
   compact?: boolean;
 }
 
 function LandingActions({
   hasSavedBudget,
+  onOpenBudget,
+  onStartBudgeting,
   compact = false,
 }: LandingActionsProps) {
   return (
     <div className={compact ? "hero-actions compact-actions" : "hero-actions"}>
       {hasSavedBudget ? (
         <>
-          <a className="button button-primary" href="#budget">
+          <button
+            className="button button-primary"
+            type="button"
+            onClick={onOpenBudget}
+          >
             Open my budget
-          </a>
+          </button>
           <button
             className="button button-secondary"
             type="button"
             aria-describedby="restart-protection"
-            onClick={confirmStartNewBudget}
+            onClick={() => confirmStartNewBudget(onStartBudgeting)}
           >
             Start a new budget
           </button>
         </>
       ) : (
-        <a className="button button-primary" href="#start-budgeting">
+        <button
+          className="button button-primary"
+          type="button"
+          onClick={onStartBudgeting}
+        >
           Start budgeting
-        </a>
+        </button>
       )}
     </div>
   );
 }
 
-function confirmStartNewBudget(): void {
-  if (window.confirm("Start a new budget and replace this browser budget?")) {
-    window.location.hash = "start-budgeting";
+interface SetupWizardProps {
+  initialSubmission?: Partial<SetupWizardSubmission>;
+  repository?: BudgetPlanRepository;
+  services: ApplicationServices;
+  today: DateOnly;
+  onComplete: (plan: BudgetPlan) => void;
+  onBack: () => void;
+}
+
+function SetupWizard({
+  initialSubmission = {},
+  repository,
+  services,
+  today,
+  onComplete,
+  onBack,
+}: SetupWizardProps) {
+  const [errorMessage, setErrorMessage] = useState<string | undefined>();
+  const [draft, setDraft] =
+    useState<Partial<SetupWizardSubmission>>(initialSubmission);
+  const estimate = estimateSetupWizardResult({
+    submission: draft,
+    today,
+  });
+
+  function updateDraft(event: React.FormEvent<HTMLFormElement>) {
+    setDraft(setupDraftFromForm(new FormData(event.currentTarget)));
   }
+
+  async function submitSetup(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (repository === undefined) {
+      setErrorMessage("Budget storage is not ready. Try again in a moment.");
+      return;
+    }
+
+    try {
+      const completion = await completeSetupWizard(
+        setupSubmissionFromForm(new FormData(event.currentTarget)),
+        {
+          repository,
+          services,
+          today,
+        },
+      );
+
+      setErrorMessage(undefined);
+      onComplete(completion.plan);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Check your setup answers.",
+      );
+    }
+  }
+
+  return (
+    <main className="app-shell setup-shell">
+      <section className="setup-header" aria-labelledby="setup-title">
+        <button className="text-button" type="button" onClick={onBack}>
+          Back
+        </button>
+        <p className="eyebrow">First budget setup</p>
+        <h1 id="setup-title">Set up your first budget</h1>
+        <p className="hero-lede">
+          Answer only what is needed to calculate a trustworthy starting number.
+        </p>
+      </section>
+
+      <form
+        className="setup-grid"
+        aria-label="Setup wizard"
+        onChange={updateDraft}
+        onSubmit={submitSetup}
+      >
+        <section className="setup-card" aria-labelledby="setup-money">
+          <p className="step-label">1. Money you can use</p>
+          <h2 id="setup-money">Start with the balance you can budget from.</h2>
+          <label>
+            Currency
+            <select name="currency" defaultValue={initialSubmission.currencyCode ?? "USD"}>
+              <option value="USD">USD - $</option>
+              <option value="INR">INR - Rs</option>
+              <option value="GBP">GBP</option>
+              <option value="EUR">EUR</option>
+            </select>
+          </label>
+          <label>
+            Current usable balance
+            <input
+              defaultValue={initialSubmission.currentUsableBalance}
+              inputMode="decimal"
+              name="current-usable-balance"
+              placeholder="$1,250.00"
+              required
+            />
+          </label>
+        </section>
+
+        <section className="setup-card" aria-labelledby="setup-mode">
+          <p className="step-label">2. Your budget rhythm</p>
+          <h2 id="setup-mode">Choose the option that sounds most like you.</h2>
+          <div className="choice-grid">
+            <label>
+              <input
+                defaultChecked={initialSubmission.mode === "fixed-income"}
+                name="mode"
+                type="radio"
+                value="fixed-income"
+                required
+              />
+              Regular paycheck
+            </label>
+            <label>
+              <input
+                defaultChecked={initialSubmission.mode === "irregular-income"}
+                name="mode"
+                type="radio"
+                value="irregular-income"
+              />
+              Irregular income
+            </label>
+            <label>
+              <input
+                defaultChecked={initialSubmission.mode === "general"}
+                name="mode"
+                type="radio"
+                value="general"
+              />
+              General budget
+            </label>
+          </div>
+          <label>
+            Period starts
+            <input
+              defaultValue={initialSubmission.periodStartDate}
+              name="period-start"
+              type="date"
+              required
+            />
+          </label>
+          <label>
+            Next payday
+            <input
+              defaultValue={initialSubmission.nextPayday}
+              name="next-payday"
+              type="date"
+            />
+          </label>
+          <label>
+            Period ends
+            <input
+              defaultValue={initialSubmission.periodEndDate}
+              name="period-end"
+              type="date"
+            />
+          </label>
+        </section>
+
+        <section className="setup-card" aria-labelledby="setup-commitments">
+          <p className="step-label">3. Money already spoken for</p>
+          <h2 id="setup-commitments">Add upcoming commitments.</h2>
+          <div className="chip-row" aria-label="Commitment shortcuts">
+            <button type="button">Rent</button>
+            <button type="button">EMI</button>
+            <button type="button">Utilities</button>
+            <button type="button">Subscriptions</button>
+            <button type="button">Custom</button>
+          </div>
+          <label className="inline-choice">
+            <input name="no-commitments" type="checkbox" />
+            I have none
+          </label>
+          <div className="commitment-fields">
+            <label>
+              Commitment shortcut
+              <select name="commitment-shortcut" defaultValue="Rent">
+                <option value="Rent">Rent</option>
+                <option value="EMI">EMI</option>
+                <option value="Utilities">Utilities</option>
+                <option value="Subscriptions">Subscriptions</option>
+                <option value="Custom">Custom</option>
+              </select>
+            </label>
+            <label>
+              Amount
+              <input inputMode="decimal" name="commitment-amount" />
+            </label>
+            <label>
+              Due date
+              <input name="commitment-due-date" type="date" />
+            </label>
+            <label>
+              Custom name
+              <input name="commitment-name" />
+            </label>
+          </div>
+        </section>
+
+        <section className="setup-card" aria-labelledby="setup-buffer">
+          <p className="step-label">4. Cushion</p>
+          <h2 id="setup-buffer">Pick a safety buffer.</h2>
+          <div className="chip-row" aria-label="Suggested buffer choices">
+            <button
+              type="button"
+              onClick={() => setDraft((current) => ({ ...current, safetyBuffer: "$50.00" }))}
+            >
+              $50
+            </button>
+            <button
+              type="button"
+              onClick={() => setDraft((current) => ({ ...current, safetyBuffer: "$100.00" }))}
+            >
+              $100
+            </button>
+            <button
+              type="button"
+              onClick={() => setDraft((current) => ({ ...current, safetyBuffer: "$250.00" }))}
+            >
+              $250
+            </button>
+            <button type="button">Custom buffer</button>
+          </div>
+          <label>
+            Safety buffer
+            <input
+              inputMode="decimal"
+              name="safety-buffer"
+              placeholder="$100.00"
+              required
+              value={draft.safetyBuffer ?? ""}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  safetyBuffer: event.target.value,
+                }))
+              }
+            />
+          </label>
+        </section>
+
+        <section className="setup-card review-card" aria-labelledby="setup-review">
+          <p className="step-label">5. Review</p>
+          <h2 id="setup-review">Calculate your first result.</h2>
+          {errorMessage === undefined ? null : (
+            <p className="validation-message" role="alert">
+              {errorMessage}
+            </p>
+          )}
+          <button className="button button-primary" type="submit">
+            Show my safe-to-spend number
+          </button>
+        </section>
+      </form>
+
+      {estimate === undefined ? null : (
+        <aside className="estimate-panel" aria-label="Provisional estimate">
+          <p className="section-kicker">This is an estimate</p>
+          <h2>Estimated safe to spend today</h2>
+          <p className="money-preview">
+            {formatMoney(
+              estimate.result.confirmed.safeToday,
+              estimate.plan.currency,
+            )}
+          </p>
+        </aside>
+      )}
+    </main>
+  );
+}
+
+function setupDraftFromForm(formData: FormData): Partial<SetupWizardSubmission> {
+  const draft: Partial<SetupWizardSubmission> = {};
+  const currencyCode = stringField(formData, "currency");
+  const currentUsableBalance = stringField(formData, "current-usable-balance");
+  const periodStartDate = stringField(formData, "period-start");
+  const periodEndDate = optionalStringField(formData, "period-end");
+  const nextPayday = optionalStringField(formData, "next-payday");
+  const safetyBuffer = stringField(formData, "safety-buffer");
+  const mode = optionalBudgetModeField(formData, "mode");
+  const noCommitments = formData.get("no-commitments") === "on";
+  const commitmentAmount = stringField(formData, "commitment-amount");
+  const commitmentDueDate = stringField(formData, "commitment-due-date");
+
+  if (currencyCode !== "") {
+    draft.currencyCode = currencyCode;
+  }
+
+  if (currentUsableBalance !== "") {
+    draft.currentUsableBalance = currentUsableBalance;
+  }
+
+  if (mode !== undefined) {
+    draft.mode = mode;
+  }
+
+  if (periodStartDate !== "") {
+    draft.periodStartDate = periodStartDate;
+  }
+
+  draft.periodEndDate = periodEndDate;
+  draft.nextPayday = nextPayday;
+
+  if (noCommitments) {
+    draft.commitments = [];
+  } else if (commitmentAmount !== "" || commitmentDueDate !== "") {
+    draft.commitments = [
+      {
+        shortcut: commitmentShortcutField(formData, "commitment-shortcut"),
+        amount: commitmentAmount,
+        dueDate: commitmentDueDate,
+        name: optionalStringField(formData, "commitment-name"),
+      },
+    ];
+  }
+
+  if (safetyBuffer !== "") {
+    draft.safetyBuffer = safetyBuffer;
+  }
+
+  return draft;
+}
+
+function setupSubmissionFromForm(formData: FormData): SetupWizardSubmission {
+  const noCommitments = formData.get("no-commitments") === "on";
+  const commitmentAmount = stringField(formData, "commitment-amount");
+  const commitmentDueDate = stringField(formData, "commitment-due-date");
+  const shortcut = commitmentShortcutField(formData, "commitment-shortcut");
+
+  return {
+    currencyCode: stringField(formData, "currency"),
+    currentUsableBalance: stringField(formData, "current-usable-balance"),
+    mode: budgetModeField(formData, "mode"),
+    periodStartDate: stringField(formData, "period-start"),
+    periodEndDate: optionalStringField(formData, "period-end"),
+    nextPayday: optionalStringField(formData, "next-payday"),
+    commitments:
+      noCommitments || commitmentAmount === "" || commitmentDueDate === ""
+        ? []
+        : [
+            {
+              shortcut,
+              amount: commitmentAmount,
+              dueDate: commitmentDueDate,
+              name: optionalStringField(formData, "commitment-name"),
+            },
+          ],
+    safetyBuffer: stringField(formData, "safety-buffer"),
+  };
+}
+
+function stringField(formData: FormData, name: string): string {
+  const value = formData.get(name);
+  return typeof value === "string" ? value : "";
+}
+
+function optionalStringField(formData: FormData, name: string): string | undefined {
+  const value = stringField(formData, name).trim();
+  return value === "" ? undefined : value;
+}
+
+function budgetModeField(formData: FormData, name: string): BudgetMode {
+  const value = optionalBudgetModeField(formData, name);
+
+  if (value !== undefined) {
+    return value;
+  }
+
+  throw new RangeError("Choose how you want to budget.");
+}
+
+function optionalBudgetModeField(
+  formData: FormData,
+  name: string,
+): BudgetMode | undefined {
+  const value = stringField(formData, name);
+
+  if (
+    value === "fixed-income" ||
+    value === "irregular-income" ||
+    value === "general"
+  ) {
+    return value;
+  }
+
+  return undefined;
+}
+
+function commitmentShortcutField(
+  formData: FormData,
+  name: string,
+): CommitmentShortcut {
+  const value = stringField(formData, name);
+
+  if (
+    value === "Rent" ||
+    value === "EMI" ||
+    value === "Utilities" ||
+    value === "Subscriptions" ||
+    value === "Custom"
+  ) {
+    return value;
+  }
+
+  return "Custom";
+}
+
+function confirmStartNewBudget(onStartBudgeting: () => void): void {
+  if (window.confirm("Start a new budget and replace this browser budget?")) {
+    onStartBudgeting();
+  }
+}
+
+interface DashboardProps {
+  plan: BudgetPlan;
+  today: DateOnly;
+}
+
+function Dashboard({ plan, today }: DashboardProps) {
+  const result = calculateSafeToSpend({ plan, today });
+  const money = (amount: Money) => formatMoney(amount, plan.currency);
+
+  return (
+    <main className="app-shell dashboard-shell">
+      <section className="dashboard-hero" aria-labelledby="dashboard-title">
+        <p className="eyebrow">Your first result</p>
+        <h1 id="dashboard-title">Safe to spend today</h1>
+        <p className="money-hero">{money(result.confirmed.safeToday)}</p>
+        <div className="result-grid" aria-label="Budget runway">
+          <article>
+            <p>Safe this week</p>
+            <strong>{money(result.confirmed.safeThisWeek)}</strong>
+          </article>
+          <article>
+            <p>Safe this period</p>
+            <strong>{money(result.confirmed.safeThisPeriod)}</strong>
+          </article>
+        </div>
+      </section>
+
+      <section className="dashboard-breakdown" aria-labelledby="breakdown-title">
+        <p className="section-kicker">Why this is the number</p>
+        <h2 id="breakdown-title">Your starting breakdown</h2>
+        <dl>
+          <div>
+            <dt>Available money</dt>
+            <dd>{money(result.breakdown.effectiveAvailableMoney)}</dd>
+          </div>
+          <div>
+            <dt>Upcoming commitments</dt>
+            <dd>{money(result.breakdown.unpaidCommitments)}</dd>
+          </div>
+          <div>
+            <dt>Protected savings</dt>
+            <dd>{money(result.breakdown.protectedSavings)}</dd>
+          </div>
+          <div>
+            <dt>Safety buffer</dt>
+            <dd>{money(result.breakdown.fixedBuffer)}</dd>
+          </div>
+        </dl>
+      </section>
+    </main>
+  );
+}
+
+function EmptyDashboard({
+  onStartBudgeting,
+}: {
+  onStartBudgeting: () => void;
+}) {
+  return (
+    <main className="app-shell setup-shell">
+      <section className="setup-header" aria-labelledby="empty-dashboard-title">
+        <p className="eyebrow">No budget found</p>
+        <h1 id="empty-dashboard-title">Set up your first budget</h1>
+        <button
+          className="button button-primary"
+          type="button"
+          onClick={onStartBudgeting}
+        >
+          Start budgeting
+        </button>
+      </section>
+    </main>
+  );
+}
+
+function createBrowserApplicationServices(): ApplicationServices {
+  return {
+    generateId: (prefix) => `${prefix}_${globalThis.crypto.randomUUID()}`,
+    now: () => new Date().toISOString(),
+  };
+}
+
+function currentDateOnly(): DateOnly {
+  return new Date().toISOString().slice(0, 10);
 }
