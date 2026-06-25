@@ -30,7 +30,7 @@ describe("project foundation", () => {
     expect(declaredPackages).toHaveProperty("vitest");
   });
 
-  it("provides a minimal Vite app entry without feature UI", () => {
+  it("provides a Vite app entry with the landing page shell", () => {
     const files = [
       "index.html",
       "src/main.tsx",
@@ -46,7 +46,7 @@ describe("project foundation", () => {
       expect(read(file).trim().length, file).toBeGreaterThan(20);
     }
 
-    expect(read("src/app/App.tsx")).toContain("Foundation ready");
+    expect(read("src/app/App.tsx")).toContain("Know what is safe to spend today");
   });
 
   it("documents the product, calculation, architecture, and phase decisions", () => {
