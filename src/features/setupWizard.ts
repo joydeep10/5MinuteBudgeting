@@ -1,4 +1,4 @@
-import { createBudgetPlan } from "../application";
+import { createBudgetPlan, defaultFlexibleCategoryDrafts } from "../application";
 import type { ApplicationServices, CommitmentTemplateDraft } from "../application";
 import { calculateSafeToSpend } from "../domain";
 import type {
@@ -142,6 +142,7 @@ export function buildBudgetPlanFromSetup(
       activePeriod,
       fixedBuffer,
       startingAvailableMoney,
+      defaultCategories: defaultFlexibleCategoryDrafts(),
       initialCommitmentTemplates: submission.commitments.map((commitment) =>
         commitmentTemplateFromSetup(commitment, currency),
       ),

@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addCommitmentTemplate,
+  addCustomCategory,
+  addSavingsGoal,
   confirmIncomeReceived,
   createBudgetPlan,
+  defaultFlexibleCategoryDrafts,
   logSpending,
   markCommitmentPaid,
   recordBalanceSnapshot,
   recordSavingsContribution,
+  setFlexibleCategoryGuidance,
+  updateCommitmentTemplate,
+  updateSavingsGoal,
 } from "../src/application";
+import { calculateSafeToSpend } from "../src/domain";
 import type { Money } from "../src/domain";
 
 const money = (minorUnits: number): Money => minorUnits;
@@ -286,5 +294,265 @@ describe("application BudgetPlan use cases", () => {
       }),
     ]);
     expect(plan.financialEvents).toHaveLength(0);
+  });
+
+  it("blocks commitment overpayments with a plain-language message", () => {
+    const services = testServices();
+    const plan = createBudgetPlan(
+      {
+        mode: "general",
+        currency: {
+          code: "USD",
+          decimalPlaces: 2,
+        },
+        activePeriod: {
+          startDate: "2026-06-01",
+          endDate: "2026-06-30",
+        },
+        fixedBuffer: money(0),
+        startingAvailableMoney: money(100_000),
+        initialCommitmentTemplates: [
+          {
+            name: "Rent",
+            kind: "bill",
+            amount: money(30_000),
+            active: true,
+            startsOn: "2026-06-10",
+            recurrence: {
+              frequency: "one-time",
+              interval: 1,
+              anchorDate: "2026-06-10",
+            },
+          },
+        ],
+      },
+      services,
+    );
+
+    expect(() =>
+      markCommitmentPaid(
+        plan,
+        {
+          date: "2026-06-10",
+          commitmentTemplateId: "commitment-template_2",
+          occurrenceDate: "2026-06-10",
+          amount: money(30_001),
+        },
+        services,
+      ),
+    ).toThrow("Payment cannot be more than the remaining commitment amount.");
+  });
+
+  it("adds and edits commitment templates immutably", () => {
+    const services = testServices();
+    const plan = createBudgetPlan(
+      {
+        mode: "general",
+        currency: {
+          code: "USD",
+          decimalPlaces: 2,
+        },
+        activePeriod: {
+          startDate: "2026-06-01",
+          endDate: "2026-06-30",
+        },
+        fixedBuffer: money(0),
+        startingAvailableMoney: money(100_000),
+      },
+      services,
+    );
+
+    const withCommitment = addCommitmentTemplate(
+      plan,
+      {
+        name: "Utilities",
+        kind: "bill",
+        amount: money(12_500),
+        active: true,
+        startsOn: "2026-06-15",
+        recurrence: {
+          frequency: "monthly",
+          interval: 1,
+          anchorDate: "2026-06-15",
+          monthly: {
+            dayOfMonth: 15,
+            missingDayBehavior: "last-valid-day",
+          },
+        },
+      },
+      services,
+    );
+    const edited = updateCommitmentTemplate(
+      withCommitment,
+      "commitment-template_3",
+      {
+        name: "Electricity",
+        amount: money(13_000),
+        startsOn: "2026-06-16",
+        recurrence: {
+          frequency: "one-time",
+          interval: 1,
+          anchorDate: "2026-06-16",
+        },
+      },
+      services,
+    );
+
+    expect(plan.plannedRecords.commitmentTemplates).toHaveLength(0);
+    expect(withCommitment.plannedRecords.commitmentTemplates[0]).toMatchObject({
+      id: "commitment-template_3",
+      name: "Utilities",
+      kind: "bill",
+      amount: 12_500,
+      startsOn: "2026-06-15",
+    });
+    expect(edited.plannedRecords.commitmentTemplates[0]).toMatchObject({
+      id: "commitment-template_3",
+      name: "Electricity",
+      kind: "bill",
+      amount: 13_000,
+      startsOn: "2026-06-16",
+      recurrence: {
+        frequency: "one-time",
+        anchorDate: "2026-06-16",
+      },
+    });
+  });
+
+  it("protects newly created savings goals by default and updates safe-to-spend when protection changes", () => {
+    const services = testServices();
+    const plan = createBudgetPlan(
+      {
+        mode: "general",
+        currency: {
+          code: "USD",
+          decimalPlaces: 2,
+        },
+        activePeriod: {
+          startDate: "2026-06-01",
+          endDate: "2026-06-30",
+        },
+        fixedBuffer: money(0),
+        startingAvailableMoney: money(100_000),
+      },
+      services,
+    );
+
+    const withGoal = addSavingsGoal(
+      plan,
+      {
+        name: "Emergency fund",
+        targetAmount: money(60_000),
+        currentAmount: money(0),
+        periodContributionOverride: money(30_000),
+      },
+      services,
+    );
+
+    expect(withGoal.plannedRecords.savingsGoals[0]).toMatchObject({
+      id: "savings-goal_3",
+      name: "Emergency fund",
+      status: "active",
+      protected: true,
+      periodContributionOverride: 30_000,
+    });
+    expect(
+      calculateSafeToSpend({
+        plan: withGoal,
+        today: "2026-06-01",
+      }).breakdown.protectedSavings,
+    ).toBe(30_000);
+
+    const informationalGoal = updateSavingsGoal(
+      withGoal,
+      {
+        savingsGoalId: "savings-goal_3",
+        protected: false,
+      },
+      services,
+    );
+
+    expect(informationalGoal.plannedRecords.savingsGoals[0]?.protected).toBe(
+      false,
+    );
+    expect(
+      calculateSafeToSpend({
+        plan: informationalGoal,
+        today: "2026-06-01",
+      }).breakdown.protectedSavings,
+    ).toBe(0);
+    expect(
+      calculateSafeToSpend({
+        plan: informationalGoal,
+        today: "2026-06-01",
+      }).confirmed.rawSafePool,
+    ).toBe(100_000);
+  });
+
+  it("adds default and custom categories with optional guidance that does not reduce safe-to-spend", () => {
+    const services = testServices();
+    const plan = createBudgetPlan(
+      {
+        mode: "general",
+        currency: {
+          code: "USD",
+          decimalPlaces: 2,
+        },
+        activePeriod: {
+          startDate: "2026-06-01",
+          endDate: "2026-06-30",
+        },
+        fixedBuffer: money(0),
+        startingAvailableMoney: money(100_000),
+        defaultCategories: defaultFlexibleCategoryDrafts(),
+      },
+      services,
+    );
+
+    const withCustomCategory = addCustomCategory(
+      plan,
+      {
+        name: "Pet care",
+      },
+      services,
+    );
+    const customCategory = withCustomCategory.plannedRecords.categories.at(-1);
+    const withGuidance = setFlexibleCategoryGuidance(
+      withCustomCategory,
+      {
+        categoryId: customCategory?.id ?? "",
+        periodLimit: money(12_000),
+      },
+      services,
+    );
+
+    expect(plan.plannedRecords.categories.map(({ name }) => name)).toEqual([
+      "Food",
+      "Transport",
+      "Shopping",
+      "Health",
+      "Entertainment",
+      "Other",
+    ]);
+    expect(customCategory).toMatchObject({
+      id: "category_9",
+      name: "Pet care",
+      kind: "custom",
+      archived: false,
+    });
+    expect(withGuidance.plannedRecords.flexibleCategoryGuidance).toEqual([
+      expect.objectContaining({
+        id: "category-guidance_10",
+        categoryId: "category_9",
+        periodLimit: 12_000,
+        reserved: false,
+      }),
+    ]);
+    expect(
+      calculateSafeToSpend({
+        plan: withGuidance,
+        today: "2026-06-01",
+      }).confirmed.rawSafePool,
+    ).toBe(100_000);
   });
 });
