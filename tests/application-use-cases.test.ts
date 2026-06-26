@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addCommitmentTemplate,
   confirmIncomeReceived,
   createBudgetPlan,
   logSpending,
   markCommitmentPaid,
   recordBalanceSnapshot,
   recordSavingsContribution,
+  updateCommitmentTemplate,
 } from "../src/application";
 import type { Money } from "../src/domain";
 
@@ -286,5 +288,128 @@ describe("application BudgetPlan use cases", () => {
       }),
     ]);
     expect(plan.financialEvents).toHaveLength(0);
+  });
+
+  it("blocks commitment overpayments with a plain-language message", () => {
+    const services = testServices();
+    const plan = createBudgetPlan(
+      {
+        mode: "general",
+        currency: {
+          code: "USD",
+          decimalPlaces: 2,
+        },
+        activePeriod: {
+          startDate: "2026-06-01",
+          endDate: "2026-06-30",
+        },
+        fixedBuffer: money(0),
+        startingAvailableMoney: money(100_000),
+        initialCommitmentTemplates: [
+          {
+            name: "Rent",
+            kind: "bill",
+            amount: money(30_000),
+            active: true,
+            startsOn: "2026-06-10",
+            recurrence: {
+              frequency: "one-time",
+              interval: 1,
+              anchorDate: "2026-06-10",
+            },
+          },
+        ],
+      },
+      services,
+    );
+
+    expect(() =>
+      markCommitmentPaid(
+        plan,
+        {
+          date: "2026-06-10",
+          commitmentTemplateId: "commitment-template_2",
+          occurrenceDate: "2026-06-10",
+          amount: money(30_001),
+        },
+        services,
+      ),
+    ).toThrow("Payment cannot be more than the remaining commitment amount.");
+  });
+
+  it("adds and edits commitment templates immutably", () => {
+    const services = testServices();
+    const plan = createBudgetPlan(
+      {
+        mode: "general",
+        currency: {
+          code: "USD",
+          decimalPlaces: 2,
+        },
+        activePeriod: {
+          startDate: "2026-06-01",
+          endDate: "2026-06-30",
+        },
+        fixedBuffer: money(0),
+        startingAvailableMoney: money(100_000),
+      },
+      services,
+    );
+
+    const withCommitment = addCommitmentTemplate(
+      plan,
+      {
+        name: "Utilities",
+        kind: "bill",
+        amount: money(12_500),
+        active: true,
+        startsOn: "2026-06-15",
+        recurrence: {
+          frequency: "monthly",
+          interval: 1,
+          anchorDate: "2026-06-15",
+          monthly: {
+            dayOfMonth: 15,
+            missingDayBehavior: "last-valid-day",
+          },
+        },
+      },
+      services,
+    );
+    const edited = updateCommitmentTemplate(
+      withCommitment,
+      "commitment-template_3",
+      {
+        name: "Electricity",
+        amount: money(13_000),
+        startsOn: "2026-06-16",
+        recurrence: {
+          frequency: "one-time",
+          interval: 1,
+          anchorDate: "2026-06-16",
+        },
+      },
+      services,
+    );
+
+    expect(plan.plannedRecords.commitmentTemplates).toHaveLength(0);
+    expect(withCommitment.plannedRecords.commitmentTemplates[0]).toMatchObject({
+      id: "commitment-template_3",
+      name: "Utilities",
+      kind: "bill",
+      amount: 12_500,
+      startsOn: "2026-06-15",
+    });
+    expect(edited.plannedRecords.commitmentTemplates[0]).toMatchObject({
+      id: "commitment-template_3",
+      name: "Electricity",
+      kind: "bill",
+      amount: 13_000,
+      startsOn: "2026-06-16",
+      recurrence: {
+        frequency: "one-time",
+        anchorDate: "2026-06-16",
+      },
+    });
   });
 });

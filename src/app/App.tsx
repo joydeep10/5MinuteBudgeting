@@ -1,14 +1,28 @@
 import { useState } from "react";
 
-import type { ApplicationServices } from "../application";
-import { calculateSafeToSpend, calculateSpendingLoggedThisPeriod } from "../domain";
+import type { ApplicationServices, CommitmentTemplateDraft } from "../application";
+import {
+  addCommitmentTemplate,
+  markCommitmentPaid,
+  updateCommitmentTemplate,
+} from "../application";
+import {
+  calculateSafeToSpend,
+  calculateSpendingLoggedThisPeriod,
+  generateCommitmentOccurrences,
+} from "../domain";
 import type {
   BudgetMode,
   BudgetPlan,
   BudgetWarning,
+  CommitmentOccurrence,
+  CommitmentTemplate,
   CurrencyMetadata,
   DateOnly,
+  FinancialEventRecord,
   Money,
+  RecurrenceFrequency,
+  RecurrenceRule,
 } from "../domain";
 import {
   completeSetupWizard,
@@ -80,7 +94,13 @@ export function App({
     return plan === undefined ? (
       <EmptyDashboard onStartBudgeting={() => setView("setup")} />
     ) : (
-      <Dashboard plan={plan} today={today} />
+      <Dashboard
+        plan={plan}
+        repository={repository}
+        services={services}
+        today={today}
+        onPlanChange={setPlan}
+      />
     );
   }
 
@@ -634,17 +654,115 @@ function confirmStartNewBudget(onStartBudgeting: () => void): void {
 
 interface DashboardProps {
   plan: BudgetPlan;
+  repository?: BudgetPlanRepository;
+  services: ApplicationServices;
   today: DateOnly;
+  onPlanChange: (plan: BudgetPlan) => void;
 }
 
-function Dashboard({ plan, today }: DashboardProps) {
+function Dashboard({
+  plan,
+  repository,
+  services,
+  today,
+  onPlanChange,
+}: DashboardProps) {
+  const [workflowMessage, setWorkflowMessage] = useState<string | undefined>();
   const result = calculateSafeToSpend({ plan, today });
   const money = (amount: Money) => formatMoney(amount, plan.currency);
   const spendingLoggedThisPeriod = calculateSpendingLoggedThisPeriod(plan);
+  const commitments = generateCommitmentOccurrences({
+    commitments: plan.plannedRecords.commitmentTemplates,
+    period: plan.activePeriod,
+    today,
+    financialEvents: plan.financialEvents,
+    amountOverrides: [],
+  });
   const shouldInviteRefinement = budgetCouldUseRefinement(plan);
   const warnings = rankedBudgetWarnings(result.warnings);
   const topWarning = warnings[0];
   const remainingWarnings = warnings.slice(1);
+
+  async function savePlan(nextPlan: BudgetPlan, message: string) {
+    onPlanChange(nextPlan);
+    setWorkflowMessage(message);
+    await repository?.saveActivePlan(nextPlan);
+  }
+
+  async function submitCommitmentPayment(
+    occurrence: CommitmentOccurrence,
+    amount?: Money,
+  ) {
+    try {
+      const nextPlan = markCommitmentPaid(
+        plan,
+        {
+          date: today,
+          commitmentTemplateId: occurrence.templateId,
+          occurrenceDate: occurrence.date,
+          amount,
+        },
+        services,
+      );
+
+      await savePlan(nextPlan, "Commitment payment recorded.");
+    } catch (error) {
+      setWorkflowMessage(
+        error instanceof Error
+          ? error.message
+          : "Payment could not be recorded.",
+      );
+    }
+  }
+
+  async function submitPartialPayment(
+    occurrence: CommitmentOccurrence,
+    event: React.FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+
+    const formData = new FormData(event.currentTarget);
+    await submitCommitmentPayment(
+      occurrence,
+      parseMoneyForCurrency(
+        stringField(formData, "partial-payment"),
+        plan.currency,
+        "Partial payment",
+      ),
+    );
+  }
+
+  async function submitCommitment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      const formData = new FormData(event.currentTarget);
+      const selectedCommitmentId = optionalStringField(formData, "commitment-id");
+      const draft = commitmentDraftFromForm(formData, plan.currency);
+      const nextPlan =
+        selectedCommitmentId === undefined
+          ? addCommitmentTemplate(plan, draft, services)
+          : updateCommitmentTemplate(
+              plan,
+              selectedCommitmentId,
+              draft,
+              services,
+            );
+
+      await savePlan(
+        nextPlan,
+        selectedCommitmentId === undefined
+          ? "Commitment added."
+          : "Commitment updated.",
+      );
+    } catch (error) {
+      setWorkflowMessage(
+        error instanceof Error
+          ? error.message
+          : "Commitment could not be saved.",
+      );
+    }
+  }
 
   return (
     <main className="app-shell dashboard-shell">
@@ -701,6 +819,105 @@ function Dashboard({ plan, today }: DashboardProps) {
         </p>
       </section>
 
+      <section className="commitments-panel" aria-labelledby="commitments-title">
+        <div className="panel-heading">
+          <div>
+            <p className="section-kicker">Bills and debts</p>
+            <h2 id="commitments-title">Commitments</h2>
+          </div>
+          <p>{money(result.breakdown.unpaidCommitments)} still unpaid</p>
+        </div>
+
+        {workflowMessage === undefined ? null : (
+          <p className="validation-message" role="status">
+            {workflowMessage}
+          </p>
+        )}
+
+        {commitments.length === 0 ? (
+          <p className="empty-note">
+            Add rent, EMI, utilities, subscriptions, or a custom commitment when money is already spoken for.
+          </p>
+        ) : (
+          <div className="commitment-list">
+            {commitments.map((commitment) => (
+              <CommitmentCard
+                commitment={commitment}
+                currency={plan.currency}
+                key={commitment.id}
+                paymentHistory={paymentHistoryForCommitment(
+                  plan.financialEvents,
+                  commitment,
+                )}
+                template={plan.plannedRecords.commitmentTemplates.find(
+                  (template) => template.id === commitment.templateId,
+                )}
+                onFullPayment={() => submitCommitmentPayment(commitment)}
+                onPartialPayment={(event) =>
+                  submitPartialPayment(commitment, event)
+                }
+              />
+            ))}
+          </div>
+        )}
+
+        <form
+          className="commitment-editor"
+          aria-label="Add or edit commitment"
+          onSubmit={submitCommitment}
+        >
+          <h3>Add or edit commitment</h3>
+          <div className="commitment-fields">
+            <label>
+              Existing commitment
+              <select name="commitment-id" defaultValue="">
+                <option value="">Add a new commitment</option>
+                {plan.plannedRecords.commitmentTemplates.map((commitment) => (
+                  <option key={commitment.id} value={commitment.id}>
+                    Edit {commitment.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Commitment type
+              <select name="commitment-type" defaultValue="Rent">
+                <option value="Rent">Rent</option>
+                <option value="EMI">EMI</option>
+                <option value="Utilities">Utilities</option>
+                <option value="Subscriptions">Subscriptions</option>
+                <option value="Custom">Custom</option>
+              </select>
+            </label>
+            <label>
+              Custom label
+              <input name="commitment-name" placeholder="School fees" />
+            </label>
+            <label>
+              Amount
+              <input inputMode="decimal" name="commitment-amount" required />
+            </label>
+            <label>
+              Due date
+              <input name="commitment-due-date" required type="date" />
+            </label>
+            <label>
+              Recurrence
+              <select name="commitment-recurrence" defaultValue="monthly">
+                <option value="one-time">One-time</option>
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Biweekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </label>
+          </div>
+          <button className="button button-primary" type="submit">
+            Save commitment
+          </button>
+        </form>
+      </section>
+
       {shouldInviteRefinement ? (
         <section className="refinement-panel" aria-labelledby="refinement-title">
           <p className="section-kicker">Refine this budget</p>
@@ -728,6 +945,235 @@ function Dashboard({ plan, today }: DashboardProps) {
       )}
     </main>
   );
+}
+
+interface CommitmentCardProps {
+  commitment: CommitmentOccurrence;
+  currency: CurrencyMetadata;
+  paymentHistory: readonly FinancialEventRecord[];
+  template?: CommitmentTemplate;
+  onFullPayment: () => void;
+  onPartialPayment: (event: React.FormEvent<HTMLFormElement>) => void;
+}
+
+function CommitmentCard({
+  commitment,
+  currency,
+  paymentHistory,
+  template,
+  onFullPayment,
+  onPartialPayment,
+}: CommitmentCardProps) {
+  const money = (amount: Money) => formatMoney(amount, currency);
+  const dueContext = commitmentDueContext(commitment);
+
+  return (
+    <article className="commitment-card">
+      <div>
+        <p className={`commitment-timing commitment-timing-${commitment.timing}`}>
+          {dueContext}
+        </p>
+        <h3>{commitment.name}</h3>
+        <p className="commitment-context">
+          {recurrenceContext(template, commitment)} · {money(commitment.amount)}
+        </p>
+      </div>
+      <div className="commitment-progress" aria-label={`${commitment.name} payment progress`}>
+        <p>
+          {money(commitment.paidAmount)} paid of {money(commitment.amount)}
+        </p>
+        <strong>{money(commitment.remainingUnpaidAmount)} remaining</strong>
+      </div>
+      {paymentHistory.length === 0 ? null : (
+        <div className="payment-history">
+          <p>Payment history</p>
+          <ul>
+            {paymentHistory.map((payment) => (
+              <li key={payment.id}>
+                {formatShortDate(payment.date)} · {money(payment.amount)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {commitment.paid ? (
+        <p className="commitment-paid">Paid in full</p>
+      ) : (
+        <div className="commitment-actions">
+          <form onSubmit={onPartialPayment}>
+            <label>
+              Partial payment
+              <input inputMode="decimal" name="partial-payment" required />
+            </label>
+            <button className="button button-secondary" type="submit">
+              Record partial payment
+            </button>
+          </form>
+          <button
+            className="button button-primary"
+            type="button"
+            onClick={onFullPayment}
+          >
+            Mark paid in full
+          </button>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function paymentHistoryForCommitment(
+  events: readonly FinancialEventRecord[],
+  commitment: CommitmentOccurrence,
+): FinancialEventRecord[] {
+  return events.filter(
+    (event) =>
+      event.kind === "commitment-payment" &&
+      event.commitmentTemplateId === commitment.templateId &&
+      event.occurrenceDate === commitment.date,
+  );
+}
+
+function commitmentDueContext(commitment: CommitmentOccurrence): string {
+  if (commitment.timing === "overdue") {
+    return "Overdue";
+  }
+
+  if (commitment.timing === "due-today") {
+    return "Due today";
+  }
+
+  return `Due ${formatShortDate(commitment.date)}`;
+}
+
+function recurrenceContext(
+  template: CommitmentTemplate | undefined,
+  commitment: CommitmentOccurrence,
+): string {
+  const frequency = template?.recurrence.frequency ?? "one-time";
+  const recurrence =
+    frequency === "one-time"
+      ? "One-time"
+      : frequency === "biweekly"
+        ? "Biweekly"
+        : `${frequency.charAt(0).toUpperCase()}${frequency.slice(1)}`;
+
+  return `${recurrence} ${commitment.kind}`;
+}
+
+function commitmentDraftFromForm(
+  formData: FormData,
+  currency: CurrencyMetadata,
+): CommitmentTemplateDraft {
+  const dueDate = stringField(formData, "commitment-due-date");
+  const frequency = recurrenceFrequencyField(formData, "commitment-recurrence");
+  const shortcut = stringField(formData, "commitment-type");
+  const customName = optionalStringField(formData, "commitment-name");
+  const name = shortcut === "Custom" ? customName ?? "Custom commitment" : shortcut;
+  const recurrence = recurrenceRuleForDueDate(frequency, dueDate);
+
+  return {
+    name,
+    kind: shortcut === "EMI" ? "debt" : "bill",
+    amount: parseMoneyForCurrency(
+      stringField(formData, "commitment-amount"),
+      currency,
+      `${name} amount`,
+    ),
+    active: true,
+    startsOn: dueDate,
+    recurrence,
+  };
+}
+
+function recurrenceFrequencyField(
+  formData: FormData,
+  name: string,
+): RecurrenceFrequency {
+  const value = stringField(formData, name);
+
+  if (
+    value === "one-time" ||
+    value === "weekly" ||
+    value === "biweekly" ||
+    value === "monthly" ||
+    value === "yearly"
+  ) {
+    return value;
+  }
+
+  return "one-time";
+}
+
+function recurrenceRuleForDueDate(
+  frequency: RecurrenceFrequency,
+  dueDate: DateOnly,
+): RecurrenceRule {
+  const day = dayParts(dueDate);
+  const rule: RecurrenceRule = {
+    frequency,
+    interval: 1,
+    anchorDate: dueDate,
+  };
+
+  if (frequency === "monthly") {
+    rule.monthly = {
+      dayOfMonth: day.dayOfMonth,
+      missingDayBehavior: "last-valid-day",
+    };
+  }
+
+  if (frequency === "yearly") {
+    rule.yearly = {
+      month: day.month,
+      dayOfMonth: day.dayOfMonth,
+      missingDayBehavior: "last-valid-day",
+    };
+  }
+
+  return rule;
+}
+
+function dayParts(date: DateOnly): { month: number; dayOfMonth: number } {
+  const [, month = "1", day = "1"] = date.split("-");
+
+  return {
+    month: Number(month),
+    dayOfMonth: Number(day),
+  };
+}
+
+function parseMoneyForCurrency(
+  input: string,
+  currency: CurrencyMetadata,
+  fieldName: string,
+): Money {
+  const cleaned = input.trim().replace(/,/g, "").replace(currency.symbol ?? "", "");
+
+  if (!/^\d+(\.\d+)?$/.test(cleaned)) {
+    throw new RangeError(`${fieldName} must be a valid money amount.`);
+  }
+
+  const [whole = "0", fraction = ""] = cleaned.split(".");
+
+  if (fraction.length > currency.decimalPlaces) {
+    throw new RangeError(
+      `${fieldName} can include at most ${currency.decimalPlaces} decimal places.`,
+    );
+  }
+
+  return (
+    Number(whole) * 10 ** currency.decimalPlaces +
+    Number(fraction.padEnd(currency.decimalPlaces, "0"))
+  );
+}
+
+function formatShortDate(date: DateOnly): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${date}T00:00:00.000Z`));
 }
 
 function budgetCouldUseRefinement(plan: BudgetPlan): boolean {
