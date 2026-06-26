@@ -230,9 +230,10 @@ h2 {
 .estimate-panel,
 .dashboard-hero,
 .dashboard-breakdown,
+.commitments-panel,
 .refinement-panel,
 .warning-panel,
-.daily-actions-panel {
+.workflow-panel {
   margin: 0 auto;
   max-width: 1120px;
   width: 100%;
@@ -261,9 +262,10 @@ h2 {
 .estimate-panel,
 .dashboard-hero,
 .dashboard-breakdown,
+.commitments-panel,
 .refinement-panel,
 .warning-panel,
-.daily-actions-panel {
+.workflow-panel {
   border: 1px solid rgb(8 47 73 / 10%);
   border-radius: 8px;
   background: rgb(255 255 255 / 80%);
@@ -479,21 +481,33 @@ button:focus-visible {
   margin-top: 18px;
 }
 
-.daily-actions-heading {
+.panel-heading {
   align-items: start;
-  display: grid;
-  gap: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
 }
 
-.daily-actions-heading h2 {
+.panel-heading h2,
+.commitment-editor h3 {
   font-size: 1.45rem;
   line-height: 1.1;
 }
 
-.daily-action-form {
+.panel-heading > p {
+  color: #31576b;
+  font-weight: 900;
+  margin: 0;
+}
+
+.daily-actions-panel {
   display: grid;
-  gap: 10px;
-  margin-top: 18px;
+  gap: 18px;
+}
+
+.daily-actions-heading {
+  align-items: center;
 }
 
 .daily-action-form h3 {
@@ -502,7 +516,6 @@ button:focus-visible {
 
 .recent-activity {
   border-top: 1px solid rgb(8 47 73 / 10%);
-  margin-top: 20px;
   padding-top: 18px;
 }
 
@@ -540,6 +553,113 @@ button:focus-visible {
 
 .activity-action {
   padding: 0;
+}
+
+.empty-note {
+  color: #31576b;
+  margin: 16px 0 0;
+}
+
+.commitment-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.commitment-card {
+  border: 1px solid rgb(8 47 73 / 10%);
+  border-radius: 8px;
+  background: #f8fafc;
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.commitment-card h3,
+.commitment-card p,
+.payment-history ul {
+  margin: 0;
+}
+
+.commitment-timing {
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.commitment-timing-overdue {
+  color: #9f1239;
+}
+
+.commitment-timing-due-today {
+  color: #92400e;
+}
+
+.commitment-timing-future {
+  color: #047857;
+}
+
+.commitment-context,
+.commitment-progress p,
+.payment-history,
+.commitment-paid {
+  color: #31576b;
+}
+
+.commitment-progress strong {
+  display: block;
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-history {
+  background: #ffffff;
+  border: 1px solid rgb(8 47 73 / 8%);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.payment-history p {
+  color: #143b52;
+  font-weight: 900;
+}
+
+.payment-history ul {
+  display: grid;
+  gap: 4px;
+  padding-left: 18px;
+}
+
+.commitment-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.commitment-actions form {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+}
+
+.commitment-actions .button,
+.commitment-editor .button {
+  width: 100%;
+}
+
+.commitment-paid {
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  font-weight: 900;
+  padding: 12px;
+}
+
+.commitment-editor {
+  border-top: 1px solid rgb(8 47 73 / 10%);
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 20px;
 }
 
 .dashboard-breakdown dl {
@@ -583,6 +703,97 @@ button:focus-visible {
   line-height: 1.1;
 }
 
+.workflow-panel {
+  display: grid;
+  gap: 20px;
+}
+
+.workflow-heading p:last-child,
+.empty-workflow-note,
+.goal-row p,
+.category-row p {
+  color: #31576b;
+  margin: 10px 0 0;
+}
+
+.workflow-heading h2 {
+  font-size: 1.8rem;
+  line-height: 1.1;
+}
+
+.workflow-form {
+  display: grid;
+  gap: 12px;
+}
+
+.workflow-form .button {
+  width: fit-content;
+}
+
+.goal-list,
+.category-list {
+  display: grid;
+  gap: 14px;
+}
+
+.goal-row,
+.category-row {
+  border: 1px solid rgb(8 47 73 / 10%);
+  border-radius: 8px;
+  background: #f8fafc;
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.mini-metrics {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.mini-metrics div {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.mini-metrics dt {
+  color: #31576b;
+  font-weight: 800;
+}
+
+.mini-metrics dd {
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  margin: 0;
+}
+
+.compact-form {
+  border-top: 1px solid rgb(8 47 73 / 10%);
+  padding-top: 16px;
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.guidance-meter {
+  background: rgb(8 47 73 / 10%);
+  border-radius: 999px;
+  height: 10px;
+  overflow: hidden;
+}
+
+.guidance-meter span {
+  background: #00bfff;
+  display: block;
+  height: 100%;
+}
+
 @media (min-width: 760px) {
   .app-shell {
     padding: 40px;
@@ -623,16 +834,48 @@ button:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .daily-actions-heading {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+  .workflow-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .daily-action-form {
-    grid-template-columns: 1fr 1fr;
+  .workflow-form .button {
+    align-self: end;
   }
 
-  .daily-action-form h3,
-  .daily-action-form .button {
+  .contribution-form,
+  .category-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .goal-row {
+    grid-template-columns: minmax(0, 0.8fr) minmax(360px, 1.2fr);
+  }
+
+  .goal-row .action-row {
     grid-column: 1 / -1;
+  }
+
+  .commitment-card {
+    grid-template-columns: minmax(0, 1.1fr) minmax(180px, 0.7fr);
+  }
+
+  .payment-history,
+  .commitment-actions,
+  .commitment-paid {
+    grid-column: span 2;
+  }
+
+  .commitment-actions {
+    align-items: end;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .commitment-actions form {
+    grid-template-columns: minmax(180px, 1fr) auto;
+  }
+
+  .commitment-actions .button,
+  .commitment-editor .button {
+    width: auto;
   }
 }

@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { markCommitmentPaid } from "../src/application";
 import { App } from "../src/app/App";
 import { budgetPlanSchemaVersion } from "../src/domain";
 import type {
@@ -11,6 +12,7 @@ import type {
   FinancialEventRecord,
   FlexibleCategoryGuidance,
   Money,
+  SavingsGoal,
 } from "../src/domain";
 
 const money = (minorUnits: number): Money => minorUnits;
@@ -86,6 +88,22 @@ const event = (
   note: overrides.note,
 });
 
+const goal = (
+  overrides: Partial<SavingsGoal> & Pick<SavingsGoal, "id">,
+): SavingsGoal => ({
+  id: overrides.id,
+  createdAt: overrides.createdAt ?? "2026-06-01T08:00:00.000Z",
+  updatedAt: overrides.updatedAt ?? "2026-06-01T08:00:00.000Z",
+  name: overrides.name ?? overrides.id,
+  targetAmount: overrides.targetAmount ?? money(0),
+  currentAmount: overrides.currentAmount ?? money(0),
+  targetDate: overrides.targetDate,
+  status: overrides.status ?? "active",
+  protected: overrides.protected ?? true,
+  priority: overrides.priority,
+  periodContributionOverride: overrides.periodContributionOverride,
+});
+
 const plan = (
   overrides: {
     fixedBuffer?: Money;
@@ -94,6 +112,7 @@ const plan = (
     categories?: readonly Category[];
     flexibleCategoryGuidance?: readonly FlexibleCategoryGuidance[];
     commitmentTemplates?: readonly CommitmentTemplate[];
+    savingsGoals?: readonly SavingsGoal[];
   } = {},
 ): BudgetPlan => ({
   schemaVersion: budgetPlanSchemaVersion,
@@ -115,7 +134,7 @@ const plan = (
     categories: overrides.categories ?? [],
     incomeTemplates: [],
     commitmentTemplates: overrides.commitmentTemplates ?? [],
-    savingsGoals: [],
+    savingsGoals: overrides.savingsGoals ?? [],
     flexibleCategoryGuidance: overrides.flexibleCategoryGuidance ?? [],
   },
   balanceSnapshots: overrides.balanceSnapshots ?? [],
@@ -123,6 +142,149 @@ const plan = (
 });
 
 describe("dashboard home", () => {
+  it("updates the visible commitment warning and safe-to-spend result after payments", () => {
+    const commitmentPlan = plan({
+      balanceSnapshots: [
+        snapshot({
+          id: "snapshot_payment",
+          amount: money(100_000),
+        }),
+      ],
+      commitmentTemplates: [
+        commitment({
+          id: "bill_rent",
+          name: "Rent",
+          amount: money(30_000),
+          startsOn: "2026-06-09",
+        }),
+      ],
+    });
+    const services = {
+      generateId: (prefix: string) => `${prefix}_payment`,
+      now: () => "2026-06-10T08:00:00.000Z",
+    };
+
+    const partiallyPaid = markCommitmentPaid(
+      commitmentPlan,
+      {
+        date: "2026-06-10",
+        commitmentTemplateId: "bill_rent",
+        occurrenceDate: "2026-06-09",
+        amount: money(10_000),
+      },
+      services,
+    );
+
+    const partialHtml = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={partiallyPaid}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(partialHtml).toContain("$100.00 paid of $300.00");
+    expect(partialHtml).toContain("$200.00 remaining");
+    expect(partialHtml).toContain("A commitment is overdue");
+    expect(partialHtml).toContain("Safe this period");
+    expect(partialHtml).toContain("$700.00");
+
+    const fullyPaid = markCommitmentPaid(
+      partiallyPaid,
+      {
+        date: "2026-06-10",
+        commitmentTemplateId: "bill_rent",
+        occurrenceDate: "2026-06-09",
+      },
+      services,
+    );
+
+    const fullHtml = renderToStaticMarkup(
+      <App initialView="dashboard" initialPlan={fullyPaid} today="2026-06-10" />,
+    );
+
+    expect(fullHtml).toContain("$300.00 paid of $300.00");
+    expect(fullHtml).toContain("$0.00 remaining");
+    expect(fullHtml).toContain("Paid in full");
+    expect(fullHtml).not.toContain("A commitment is overdue");
+    expect(fullHtml).toContain("$700.00");
+  });
+
+  it("shows commitments with overdue and due-today items first plus payment and edit actions", () => {
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_commitments",
+              amount: money(100_000),
+            }),
+          ],
+          commitmentTemplates: [
+            commitment({
+              id: "bill_future",
+              name: "Internet",
+              amount: money(8_000),
+              startsOn: "2026-06-20",
+              recurrence: {
+                frequency: "monthly",
+                interval: 1,
+                anchorDate: "2026-06-20",
+                monthly: {
+                  dayOfMonth: 20,
+                  missingDayBehavior: "last-valid-day",
+                },
+              },
+            }),
+            commitment({
+              id: "bill_overdue",
+              name: "Rent",
+              amount: money(30_000),
+              startsOn: "2026-06-09",
+            }),
+            commitment({
+              id: "debt_today",
+              name: "Card EMI",
+              kind: "debt",
+              amount: money(15_000),
+              startsOn: "2026-06-10",
+            }),
+          ],
+          financialEvents: [
+            event({
+              id: "rent_part_payment",
+              date: "2026-06-09",
+              kind: "commitment-payment",
+              amount: money(5_000),
+              commitmentTemplateId: "bill_overdue",
+              occurrenceDate: "2026-06-09",
+            }),
+          ],
+        })}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain("Commitments");
+    expect(html.indexOf("Rent")).toBeLessThan(html.indexOf("Card EMI"));
+    expect(html.indexOf("Card EMI")).toBeLessThan(html.indexOf("Internet"));
+    expect(html).toContain("Overdue");
+    expect(html).toContain("Due today");
+    expect(html).toContain("Due Jun 20");
+    expect(html).toContain("Monthly bill");
+    expect(html).toContain("$50.00 paid of $300.00");
+    expect(html).toContain("$250.00 remaining");
+    expect(html).toContain("Record partial payment");
+    expect(html).toContain("Mark paid in full");
+    expect(html).toContain("Add or edit commitment");
+    expect(html).toContain("Commitment type");
+    expect(html).toContain("Rent");
+    expect(html).toContain("EMI");
+    expect(html).toContain("Utilities");
+    expect(html).toContain("Subscriptions");
+  });
+
   it("surfaces the highest-priority warning prominently and keeps the rest secondary", () => {
     const dining = category({
       id: "category_dining",
@@ -238,5 +400,82 @@ describe("dashboard home", () => {
     expect(spendingHtml).toContain(
       "Spending and payments are already reflected in available money.",
     );
+  });
+
+  it("shows savings and category guidance workflows without treating category guidance as protected money", () => {
+    const food = category({
+      id: "category_food",
+      name: "Food",
+    });
+    const custom = category({
+      id: "category_pet_care",
+      name: "Pet care",
+      kind: "custom",
+    });
+
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_opening",
+              amount: money(100_000),
+            }),
+          ],
+          savingsGoals: [
+            goal({
+              id: "goal_emergency",
+              name: "Emergency fund",
+              targetAmount: money(60_000),
+              currentAmount: money(10_000),
+              periodContributionOverride: money(30_000),
+            }),
+          ],
+          categories: [food, custom],
+          flexibleCategoryGuidance: [
+            guidance({
+              id: "guidance_food",
+              categoryId: food.id,
+              periodLimit: money(20_000),
+            }),
+            guidance({
+              id: "guidance_pet_care",
+              categoryId: custom.id,
+              periodLimit: money(12_000),
+            }),
+          ],
+          financialEvents: [
+            event({
+              id: "emergency_contribution",
+              date: "2026-06-10",
+              kind: "savings-contribution",
+              amount: money(10_000),
+              savingsGoalId: "goal_emergency",
+            }),
+          ],
+        })}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain("Savings goals");
+    expect(html).toContain("set this money aside before calculating what I can spend");
+    expect(html).toContain("Emergency fund");
+    expect(html).toContain("Protected");
+    expect(html).toContain("Record contribution");
+    expect(html).toContain("Save goal changes");
+    expect(html).toContain("Pause goal");
+    expect(html).toContain("Complete goal");
+    expect(html).toContain("Archive goal");
+    expect(html).toContain("Protected savings");
+    expect(html).toContain("$200.00");
+    expect(html).toContain("Category guidance");
+    expect(html).toContain("Optional visual guidance");
+    expect(html).toContain("does not reduce safe-to-spend");
+    expect(html).toContain("Food");
+    expect(html).toContain("Pet care");
+    expect(html).toContain("Add custom category");
+    expect(html).toContain("Set guidance");
   });
 });
