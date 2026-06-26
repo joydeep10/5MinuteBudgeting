@@ -12,6 +12,12 @@ import {
 } from "../application";
 import type { ApplicationServices, CommitmentTemplateDraft } from "../application";
 import {
+  correctDailyActivity,
+  deleteDailyActivity,
+  performDailyAction,
+  undoLastDailyActivity,
+} from "../features/dailyActions";
+import {
   calculateCategorySummaries,
   calculateSafeToSpend,
   calculateSavingsGoalAllocations,
@@ -19,6 +25,7 @@ import {
   generateCommitmentOccurrences,
 } from "../domain";
 import type {
+  BalanceSnapshot,
   BudgetMode,
   BudgetPlan,
   BudgetWarning,
@@ -834,6 +841,14 @@ function Dashboard({
         </p>
       </section>
 
+      <DailyActionPanel
+        onPlanChange={onPlanChange}
+        plan={plan}
+        repository={repository}
+        services={services}
+        today={today}
+      />
+
       <section className="commitments-panel" aria-labelledby="commitments-title">
         <div className="panel-heading">
           <div>
@@ -977,6 +992,520 @@ function Dashboard({
       )}
     </main>
   );
+}
+
+function DailyActionPanel({
+  onPlanChange,
+  plan,
+  repository,
+  services,
+  today,
+}: {
+  onPlanChange: (plan: BudgetPlan) => void;
+  plan: BudgetPlan;
+  repository?: BudgetPlanRepository;
+  services: ApplicationServices;
+  today: DateOnly;
+}) {
+  const [message, setMessage] = useState<string | undefined>();
+
+  async function saveAction(
+    action: Parameters<typeof performDailyAction>[1],
+  ): Promise<void> {
+    if (repository === undefined) {
+      setMessage("Budget storage is not ready. Try again in a moment.");
+      return;
+    }
+
+    try {
+      const completion = await performDailyAction(plan, action, {
+        repository,
+        services,
+        today,
+      });
+
+      setMessage("Daily check-in saved.");
+      onPlanChange(completion.plan);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Check the activity details.",
+      );
+    }
+  }
+
+  async function submitSpending(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+
+    await saveAction({
+      kind: "log-spending",
+      amount: stringField(formData, "spending-amount"),
+      categoryId: optionalStringField(formData, "spending-category"),
+      note: optionalStringField(formData, "spending-note"),
+      date: requiredFormString(formData, "spending-date"),
+    });
+  }
+
+  async function submitBalance(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+
+    await saveAction({
+      kind: "update-balance",
+      amount: stringField(formData, "balance-amount"),
+      note: optionalStringField(formData, "balance-note"),
+      date: requiredFormString(formData, "balance-date"),
+    });
+  }
+
+  async function submitIncome(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+
+    await saveAction({
+      kind: "confirm-income",
+      amount: stringField(formData, "income-amount"),
+      incomeTemplateId: optionalStringField(formData, "income-template"),
+      note: optionalStringField(formData, "income-note"),
+      date: requiredFormString(formData, "income-date"),
+    });
+  }
+
+  async function submitSavings(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const savingsGoalId = requiredFormString(formData, "savings-goal");
+
+    await saveAction({
+      kind: "record-savings-contribution",
+      amount: stringField(formData, "savings-amount"),
+      savingsGoalId,
+      note: optionalStringField(formData, "savings-note"),
+      date: requiredFormString(formData, "savings-date"),
+    });
+  }
+
+  async function undoLastAction(): Promise<void> {
+    if (repository === undefined) {
+      setMessage("Budget storage is not ready. Try again in a moment.");
+      return;
+    }
+
+    if (!window.confirm("Undo the latest activity and recalculate your budget?")) {
+      return;
+    }
+
+    try {
+      const completion = await undoLastDailyActivity(plan, {
+        repository,
+        services,
+        today,
+      });
+
+      setMessage("Latest activity undone.");
+      onPlanChange(completion.plan);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nothing to undo.");
+    }
+  }
+
+  async function correctActivity(activity: DailyActivityListItem): Promise<void> {
+    if (repository === undefined) {
+      setMessage("Budget storage is not ready. Try again in a moment.");
+      return;
+    }
+
+    if (activity.source !== "financial-event") {
+      setMessage("Balance updates can be corrected by recording a new balance.");
+      return;
+    }
+
+    const amount = window.prompt(
+      "Correct the amount for this activity.",
+      formatMoney(activity.amount, plan.currency),
+    );
+
+    if (amount === null) {
+      return;
+    }
+
+    const note = window.prompt("Correct the note for this activity.", activity.label);
+
+    try {
+      const completion = await correctDailyActivity(
+        plan,
+        {
+          kind: "financial-event",
+          id: activity.id,
+          amount,
+          note: note ?? activity.label,
+        },
+        {
+          repository,
+          services,
+          today,
+        },
+      );
+
+      setMessage("Activity corrected.");
+      onPlanChange(completion.plan);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Check the correction details.",
+      );
+    }
+  }
+
+  async function deleteActivity(activity: DailyActivityListItem): Promise<void> {
+    if (repository === undefined) {
+      setMessage("Budget storage is not ready. Try again in a moment.");
+      return;
+    }
+
+    if (activity.source !== "financial-event") {
+      setMessage("Balance updates can be corrected by recording a new balance.");
+      return;
+    }
+
+    if (!window.confirm("Delete this activity and recalculate your budget?")) {
+      return;
+    }
+
+    try {
+      const completion = await deleteDailyActivity(
+        plan,
+        {
+          kind: "financial-event",
+          id: activity.id,
+        },
+        {
+          repository,
+          services,
+          today,
+        },
+      );
+
+      setMessage("Activity deleted.");
+      onPlanChange(completion.plan);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not delete activity.");
+    }
+  }
+
+  return (
+    <section
+      className="workflow-panel daily-actions-panel"
+      aria-labelledby="daily-actions-title"
+    >
+      <div className="panel-heading daily-actions-heading">
+        <div>
+          <p className="section-kicker">Daily check-in</p>
+          <h2 id="daily-actions-title">Log spending</h2>
+        </div>
+        <button className="button button-primary" form="log-spending-form" type="submit">
+          Log spending
+        </button>
+        <button
+          className="button button-secondary"
+          type="button"
+          onClick={() => void undoLastAction()}
+        >
+          Undo last action
+        </button>
+      </div>
+
+      {message === undefined ? null : (
+        <p className="validation-message" role="status">
+          {message}
+        </p>
+      )}
+
+      <form
+        className="workflow-form daily-action-form"
+        id="log-spending-form"
+        aria-label="Log spending"
+        onSubmit={(event) => void submitSpending(event)}
+      >
+        <label>
+          Amount
+          <input inputMode="decimal" name="spending-amount" placeholder="$25.00" required />
+        </label>
+        <label>
+          Category
+          <select name="spending-category" defaultValue="">
+            <option value="">No category</option>
+            {plan.plannedRecords.categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Note
+          <input name="spending-note" placeholder="Groceries" />
+        </label>
+        <label>
+          Date
+          <input defaultValue={today} name="spending-date" type="date" required />
+        </label>
+      </form>
+
+      <form
+        className="workflow-form daily-action-form"
+        aria-label="Update current balance"
+        onSubmit={(event) => void submitBalance(event)}
+      >
+        <h3>Update current balance</h3>
+        <label>
+          Amount
+          <input inputMode="decimal" name="balance-amount" placeholder="$800.00" required />
+        </label>
+        <label>
+          Note
+          <input name="balance-note" placeholder="Checked bank balance" />
+        </label>
+        <label>
+          Date
+          <input defaultValue={today} name="balance-date" type="date" required />
+        </label>
+        <button className="button button-secondary" type="submit">
+          Save balance
+        </button>
+      </form>
+
+      {plan.plannedRecords.incomeTemplates.length === 0 ? null : (
+        <form
+          className="workflow-form daily-action-form"
+          aria-label="Confirm income"
+          onSubmit={(event) => void submitIncome(event)}
+        >
+          <h3>Confirm income</h3>
+          <label>
+            Amount
+            <input inputMode="decimal" name="income-amount" placeholder="$120.00" required />
+          </label>
+          <label>
+            Income source
+            <select name="income-template" defaultValue="">
+              <option value="">Choose income</option>
+              {plan.plannedRecords.incomeTemplates.map((income) => (
+                <option key={income.id} value={income.id}>
+                  {income.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Note
+            <input name="income-note" placeholder="Paycheck" />
+          </label>
+          <label>
+            Date
+            <input defaultValue={today} name="income-date" type="date" required />
+          </label>
+          <button className="button button-secondary" type="submit">
+            Save income
+          </button>
+        </form>
+      )}
+
+      {plan.plannedRecords.savingsGoals.length === 0 ? null : (
+        <form
+          className="workflow-form daily-action-form"
+          aria-label="Record savings contribution"
+          onSubmit={(event) => void submitSavings(event)}
+        >
+          <h3>Record savings contribution</h3>
+          <label>
+            Amount
+            <input inputMode="decimal" name="savings-amount" placeholder="$50.00" required />
+          </label>
+          <label>
+            Savings goal
+            <select name="savings-goal" defaultValue="" required>
+              <option value="">Choose goal</option>
+              {plan.plannedRecords.savingsGoals.map((goal) => (
+                <option key={goal.id} value={goal.id}>
+                  {goal.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Note
+            <input name="savings-note" placeholder="Emergency fund" />
+          </label>
+          <label>
+            Date
+            <input defaultValue={today} name="savings-date" type="date" required />
+          </label>
+          <button className="button button-secondary" type="submit">
+            Save savings
+          </button>
+        </form>
+      )}
+
+      <RecentActivity
+        onCorrect={(activity) => void correctActivity(activity)}
+        onDelete={(activity) => void deleteActivity(activity)}
+        plan={plan}
+      />
+    </section>
+  );
+}
+
+function RecentActivity({
+  onCorrect,
+  onDelete,
+  plan,
+}: {
+  onCorrect: (activity: DailyActivityListItem) => void;
+  onDelete: (activity: DailyActivityListItem) => void;
+  plan: BudgetPlan;
+}) {
+  const activities = [
+    ...plan.financialEvents.map((event) => financialEventActivity(event, plan)),
+    ...plan.balanceSnapshots.map(balanceSnapshotActivity),
+  ]
+    .sort(compareActivitiesNewestFirst)
+    .slice(0, 5);
+
+  return (
+    <section className="recent-activity" aria-labelledby="recent-activity-title">
+      <h3 id="recent-activity-title">Recent activity</h3>
+      {activities.length === 0 ? (
+        <p>No activity logged yet.</p>
+      ) : (
+        <ul>
+          {activities.map((activity) => (
+            <li key={activity.id}>
+              <span>{activity.label}</span>
+              <strong>{formatMoney(activity.amount, plan.currency)}</strong>
+              {activity.source === "financial-event" ? (
+                <>
+                  <button
+                    className="text-button activity-action"
+                    type="button"
+                    onClick={() => onCorrect(activity)}
+                  >
+                    Correct activity
+                  </button>
+                  <button
+                    className="text-button activity-action"
+                    type="button"
+                    onClick={() => onDelete(activity)}
+                  >
+                    Delete activity
+                  </button>
+                </>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+interface DailyActivityListItem {
+  id: string;
+  source: "financial-event" | "balance-snapshot";
+  date: DateOnly;
+  createdAt: string;
+  label: string;
+  amount: Money;
+}
+
+function compareActivitiesNewestFirst(
+  left: DailyActivityListItem,
+  right: DailyActivityListItem,
+): number {
+  if (left.date !== right.date) {
+    return right.date.localeCompare(left.date);
+  }
+
+  return Date.parse(right.createdAt) - Date.parse(left.createdAt);
+}
+
+function financialEventActivity(
+  event: FinancialEventRecord,
+  plan: BudgetPlan,
+): DailyActivityListItem {
+  if (event.note !== undefined) {
+    return {
+      id: event.id,
+      source: "financial-event",
+      date: event.date,
+      createdAt: event.createdAt,
+      label: event.note,
+      amount: event.amount,
+    };
+  }
+
+  if (event.categoryId !== undefined) {
+    return {
+      id: event.id,
+      source: "financial-event",
+      date: event.date,
+      createdAt: event.createdAt,
+      label:
+        plan.plannedRecords.categories.find(
+          (category) => category.id === event.categoryId,
+        )?.name ?? "Spending",
+      amount: event.amount,
+    };
+  }
+
+  if (event.incomeTemplateId !== undefined) {
+    return {
+      id: event.id,
+      source: "financial-event",
+      date: event.date,
+      createdAt: event.createdAt,
+      label:
+        plan.plannedRecords.incomeTemplates.find(
+          (income) => income.id === event.incomeTemplateId,
+        )?.name ?? "Income received",
+      amount: event.amount,
+    };
+  }
+
+  if (event.savingsGoalId !== undefined) {
+    return {
+      id: event.id,
+      source: "financial-event",
+      date: event.date,
+      createdAt: event.createdAt,
+      label:
+        plan.plannedRecords.savingsGoals.find(
+          (goal) => goal.id === event.savingsGoalId,
+        )?.name ?? "Savings contribution",
+      amount: event.amount,
+    };
+  }
+
+  return {
+    id: event.id,
+    source: "financial-event",
+    date: event.date,
+    createdAt: event.createdAt,
+    label: "Spending",
+    amount: event.amount,
+  };
+}
+
+function balanceSnapshotActivity(
+  snapshot: BalanceSnapshot,
+): DailyActivityListItem {
+  return {
+    id: snapshot.id,
+    source: "balance-snapshot",
+    date: snapshot.date,
+    createdAt: snapshot.createdAt,
+    label: snapshot.note ?? "Current balance update",
+    amount: snapshot.amount,
+  };
 }
 
 interface SavingsGoalsPanelProps {

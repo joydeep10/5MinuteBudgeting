@@ -501,6 +501,60 @@ button:focus-visible {
   margin: 0;
 }
 
+.daily-actions-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.daily-actions-heading {
+  align-items: center;
+}
+
+.daily-action-form h3 {
+  font-size: 1.05rem;
+}
+
+.recent-activity {
+  border-top: 1px solid rgb(8 47 73 / 10%);
+  padding-top: 18px;
+}
+
+.recent-activity h3 {
+  font-size: 1.05rem;
+}
+
+.recent-activity p,
+.recent-activity ul {
+  margin: 12px 0 0;
+}
+
+.recent-activity ul {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+}
+
+.recent-activity li {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid rgb(8 47 73 / 10%);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.recent-activity strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-action {
+  padding: 0;
+}
+
 .empty-note {
   color: #31576b;
   margin: 16px 0 0;
