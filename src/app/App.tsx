@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { suggestNextActivePeriod } from "../application";
 import type { ApplicationServices } from "../application";
 import { calculateSafeToSpend, calculateSpendingLoggedThisPeriod } from "../domain";
 import type {
@@ -9,12 +10,15 @@ import type {
   CurrencyMetadata,
   DateOnly,
   Money,
+  PeriodSnapshot,
 } from "../domain";
 import {
   completeSetupWizard,
   estimateSetupWizardResult,
   formatMoney,
+  parseMoneyInput,
 } from "../features/setupWizard";
+import { completePeriodRollover } from "../features/periodRollover";
 import type {
   CommitmentShortcut,
   SetupWizardSubmission,
@@ -80,7 +84,13 @@ export function App({
     return plan === undefined ? (
       <EmptyDashboard onStartBudgeting={() => setView("setup")} />
     ) : (
-      <Dashboard plan={plan} today={today} />
+      <Dashboard
+        plan={plan}
+        repository={repository}
+        services={services}
+        today={today}
+        onPlanChange={setPlan}
+      />
     );
   }
 
@@ -634,10 +644,19 @@ function confirmStartNewBudget(onStartBudgeting: () => void): void {
 
 interface DashboardProps {
   plan: BudgetPlan;
+  repository?: BudgetPlanRepository;
+  services: ApplicationServices;
   today: DateOnly;
+  onPlanChange: (plan: BudgetPlan) => void;
 }
 
-function Dashboard({ plan, today }: DashboardProps) {
+function Dashboard({
+  plan,
+  repository,
+  services,
+  today,
+  onPlanChange,
+}: DashboardProps) {
   const result = calculateSafeToSpend({ plan, today });
   const money = (amount: Money) => formatMoney(amount, plan.currency);
   const spendingLoggedThisPeriod = calculateSpendingLoggedThisPeriod(plan);
@@ -726,7 +745,173 @@ function Dashboard({ plan, today }: DashboardProps) {
           </div>
         </section>
       )}
+
+      {today >= plan.activePeriod.endDate ? (
+        <PeriodRolloverPanel
+          openingBalance={result.breakdown.effectiveAvailableMoney}
+          onPlanChange={onPlanChange}
+          plan={plan}
+          repository={repository}
+          services={services}
+          today={today}
+        />
+      ) : null}
+
+      <PeriodHistoryPanel currency={plan.currency} snapshots={plan.periodSnapshots} />
     </main>
+  );
+}
+
+interface PeriodRolloverPanelProps {
+  plan: BudgetPlan;
+  openingBalance: Money;
+  repository?: BudgetPlanRepository;
+  services: ApplicationServices;
+  today: DateOnly;
+  onPlanChange: (plan: BudgetPlan) => void;
+}
+
+function PeriodRolloverPanel({
+  plan,
+  openingBalance,
+  repository,
+  services,
+  today,
+  onPlanChange,
+}: PeriodRolloverPanelProps) {
+  const [errorMessage, setErrorMessage] = useState<string | undefined>();
+  const nextPeriod = suggestNextActivePeriod(plan);
+  const endedPeriodLabel = periodLabel(plan.activePeriod);
+  const periodIsEndingToday = today === plan.activePeriod.endDate;
+
+  async function submitRollover(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (repository === undefined) {
+      setErrorMessage("Budget storage is not ready. Try again in a moment.");
+      return;
+    }
+
+    try {
+      const completion = await completePeriodRollover(
+        {
+          plan,
+          confirmedAvailableMoney: parseMoneyInput(
+            stringField(new FormData(event.currentTarget), "opening-balance"),
+            plan.currency,
+            "Opening balance",
+          ),
+        },
+        {
+          repository,
+          services,
+        },
+      );
+
+      setErrorMessage(undefined);
+      onPlanChange(completion.plan);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Check the opening balance.",
+      );
+    }
+  }
+
+  return (
+    <section className="rollover-panel" aria-labelledby="rollover-title">
+      <p className="section-kicker">
+        {periodIsEndingToday ? "Period ending today" : "Period ended"}
+      </p>
+      <h2 id="rollover-title">Ready to roll this period forward</h2>
+      <p className="rollover-copy">Review {endedPeriodLabel}</p>
+      <dl>
+        <div>
+          <dt>Ending available money</dt>
+          <dd>{formatMoney(openingBalance, plan.currency)}</dd>
+        </div>
+        <div>
+          <dt>Spending logged</dt>
+          <dd>
+            {formatMoney(calculateSpendingLoggedThisPeriod(plan), plan.currency)}
+          </dd>
+        </div>
+      </dl>
+      <form
+        className="rollover-form"
+        aria-label="Rollover confirmation"
+        onSubmit={submitRollover}
+      >
+        <label>
+          Opening balance for the next period
+          <input
+            defaultValue={moneyInputValue(openingBalance, plan.currency)}
+            inputMode="decimal"
+            name="opening-balance"
+          />
+        </label>
+        {errorMessage === undefined ? null : (
+          <p className="validation-message" role="alert">
+            {errorMessage}
+          </p>
+        )}
+        <p>Rollover is optional until you confirm it.</p>
+        <p>
+          This creates {periodLabel(nextPeriod)}. Your {endedPeriodLabel} history
+          will be kept as a period snapshot.
+        </p>
+        <button className="button button-primary" type="submit">
+          Roll forward
+        </button>
+      </form>
+    </section>
+  );
+}
+
+interface PeriodHistoryPanelProps {
+  currency: CurrencyMetadata;
+  snapshots?: readonly PeriodSnapshot[];
+}
+
+function PeriodHistoryPanel({
+  currency,
+  snapshots = [],
+}: PeriodHistoryPanelProps) {
+  if (snapshots.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="period-history-panel" aria-labelledby="period-history-title">
+      <p className="section-kicker">History kept as snapshots</p>
+      <h2 id="period-history-title">Previous periods</h2>
+      <div className="period-history-list">
+        {snapshots.map((snapshot) => (
+          <article className="period-history-card" key={snapshot.id}>
+            <h3>{periodLabel(snapshot.period)}</h3>
+            <dl>
+              <div>
+                <dt>Ending available money</dt>
+                <dd>
+                  {formatMoney(snapshot.endingEffectiveAvailableMoney, currency)}
+                </dd>
+              </div>
+              <div>
+                <dt>Spent</dt>
+                <dd>{formatMoney(snapshot.totalSpending, currency)}</dd>
+              </div>
+              <div>
+                <dt>Commitments paid</dt>
+                <dd>{formatMoney(snapshot.totalCommitmentsPaid, currency)}</dd>
+              </div>
+              <div>
+                <dt>Savings contributed</dt>
+                <dd>{formatMoney(snapshot.totalSavingsContributions, currency)}</dd>
+              </div>
+            </dl>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -859,6 +1044,23 @@ function warningAmount(warning: BudgetWarning): Money | undefined {
     warning.metadata.overageAmount;
 
   return typeof candidate === "number" ? candidate : undefined;
+}
+
+function periodLabel(period: { startDate: DateOnly; endDate: DateOnly }): string {
+  return `${dateLabel(period.startDate)} to ${dateLabel(period.endDate)}`;
+}
+
+function dateLabel(date: DateOnly): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${date}T00:00:00.000Z`));
+}
+
+function moneyInputValue(amount: Money, currency: CurrencyMetadata): string {
+  return (amount / 10 ** currency.decimalPlaces).toFixed(currency.decimalPlaces);
 }
 
 function EmptyDashboard({
