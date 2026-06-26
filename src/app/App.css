@@ -233,6 +233,8 @@ h2 {
 .commitments-panel,
 .refinement-panel,
 .warning-panel,
+.rollover-panel,
+.period-history-panel,
 .workflow-panel {
   margin: 0 auto;
   max-width: 1120px;
@@ -265,6 +267,8 @@ h2 {
 .commitments-panel,
 .refinement-panel,
 .warning-panel,
+.rollover-panel,
+.period-history-panel,
 .workflow-panel {
   border: 1px solid rgb(8 47 73 / 10%);
   border-radius: 8px;
@@ -701,6 +705,85 @@ button:focus-visible {
 .refinement-panel h2 {
   font-size: 1.45rem;
   line-height: 1.1;
+}
+
+.rollover-panel dl {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.rollover-panel dl div {
+  align-items: center;
+  border-bottom: 1px solid rgb(8 47 73 / 10%);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 12px 0;
+}
+
+.rollover-panel dt,
+.rollover-form p,
+.rollover-copy {
+  color: #31576b;
+}
+
+.rollover-panel dd {
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  margin: 0;
+}
+
+.rollover-form {
+  display: grid;
+  gap: 16px;
+}
+
+.rollover-form p {
+  margin: 0;
+}
+
+.period-history-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.period-history-card {
+  background: #f8fafc;
+  border: 1px solid rgb(8 47 73 / 10%);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.period-history-card h3 {
+  font-size: 1.05rem;
+}
+
+.period-history-card dl {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.period-history-card dl div {
+  align-items: center;
+  border-bottom: 1px solid rgb(8 47 73 / 8%);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 10px 0;
+}
+
+.period-history-card dt {
+  color: #31576b;
+  font-weight: 800;
+}
+
+.period-history-card dd {
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  margin: 0;
 }
 
 .workflow-panel {

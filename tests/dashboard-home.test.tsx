@@ -12,6 +12,7 @@ import type {
   FinancialEventRecord,
   FlexibleCategoryGuidance,
   Money,
+  PeriodSnapshot,
   SavingsGoal,
 } from "../src/domain";
 
@@ -112,6 +113,7 @@ const plan = (
     categories?: readonly Category[];
     flexibleCategoryGuidance?: readonly FlexibleCategoryGuidance[];
     commitmentTemplates?: readonly CommitmentTemplate[];
+    periodSnapshots?: readonly PeriodSnapshot[];
     savingsGoals?: readonly SavingsGoal[];
   } = {},
 ): BudgetPlan => ({
@@ -139,9 +141,114 @@ const plan = (
   },
   balanceSnapshots: overrides.balanceSnapshots ?? [],
   financialEvents: overrides.financialEvents ?? [],
+  periodSnapshots: overrides.periodSnapshots,
 });
 
 describe("dashboard home", () => {
+  it("keeps rolled periods visible as dashboard history", () => {
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={{
+          ...plan({
+            balanceSnapshots: [
+              snapshot({
+                id: "snapshot_new_period",
+                date: "2026-07-01",
+                amount: money(82_500),
+              }),
+            ],
+            periodSnapshots: [
+              {
+                id: "period_snapshot_june",
+                createdAt: "2026-07-01T08:00:00.000Z",
+                updatedAt: "2026-07-01T08:00:00.000Z",
+                period: {
+                  startDate: "2026-06-01",
+                  endDate: "2026-06-30",
+                },
+                startingAvailableMoney: money(100_000),
+                endingEffectiveAvailableMoney: money(80_000),
+                totalSpending: money(20_000),
+                totalCommitmentsPaid: money(0),
+                totalSavingsContributions: money(0),
+                finalHealthStatus: "safe",
+              },
+            ],
+          }),
+          activePeriod: {
+            startDate: "2026-07-01",
+            endDate: "2026-07-30",
+          },
+        }}
+        today="2026-07-01"
+      />,
+    );
+
+    expect(html).toContain("Previous periods");
+    expect(html).toContain("History kept as snapshots");
+    expect(html).toContain("June 1, 2026 to June 30, 2026");
+    expect(html).toContain("Ending available money");
+    expect(html).toContain("$800.00");
+    expect(html).toContain("Spent");
+    expect(html).toContain("$200.00");
+  });
+
+  it("presents an ending active period before it rolls over", () => {
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_ending",
+              amount: money(75_000),
+            }),
+          ],
+        })}
+        today="2026-06-30"
+      />,
+    );
+
+    expect(html).toContain("Period ending today");
+    expect(html).toContain("Review June 1, 2026 to June 30, 2026");
+    expect(html).toContain("Rollover is optional until you confirm it.");
+  });
+
+  it("shows an explicit rollover review when the active period has ended", () => {
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          fixedBuffer: money(5_000),
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_ended",
+              amount: money(100_000),
+            }),
+          ],
+          financialEvents: [
+            event({
+              id: "spend_end_period",
+              amount: money(20_000),
+              date: "2026-06-20",
+            }),
+          ],
+        })}
+        today="2026-07-01"
+      />,
+    );
+
+    expect(html).toContain("Ready to roll this period forward");
+    expect(html).toContain("Review June 1, 2026 to June 30, 2026");
+    expect(html).toContain("Opening balance for the next period");
+    expect(html).toContain("This creates July 1, 2026 to July 30, 2026");
+    expect(html).toContain(
+      "Your June 1, 2026 to June 30, 2026 history will be kept as a period snapshot.",
+    );
+    expect(html).toContain("Roll forward");
+  });
+
   it("updates the visible commitment warning and safe-to-spend result after payments", () => {
     const commitmentPlan = plan({
       balanceSnapshots: [

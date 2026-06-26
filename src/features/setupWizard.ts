@@ -225,7 +225,7 @@ function activePeriodFromSetup(
   };
 }
 
-function parseMoneyInput(
+export function parseMoneyInput(
   input: string,
   currency: CurrencyMetadata,
   fieldName: string,
