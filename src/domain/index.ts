@@ -481,6 +481,13 @@ export function calculateEffectiveAvailableMoney(plan: BudgetPlan): Money {
   return startingAmount + eventImpact;
 }
 
+export function calculateSpendingLoggedThisPeriod(plan: BudgetPlan): Money {
+  return plan.financialEvents
+    .filter((event) => event.kind === "spending")
+    .filter((event) => dateOnlyIsInsidePeriod(event.date, plan.activePeriod))
+    .reduce((total, event) => total + event.amount, 0);
+}
+
 export function calculateSafeToSpend({
   plan,
   today,

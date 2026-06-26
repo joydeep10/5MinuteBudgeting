@@ -229,7 +229,9 @@ h2 {
 .setup-grid,
 .estimate-panel,
 .dashboard-hero,
-.dashboard-breakdown {
+.dashboard-breakdown,
+.refinement-panel,
+.warning-panel {
   margin: 0 auto;
   max-width: 1120px;
   width: 100%;
@@ -257,7 +259,9 @@ h2 {
 .setup-card,
 .estimate-panel,
 .dashboard-hero,
-.dashboard-breakdown {
+.dashboard-breakdown,
+.refinement-panel,
+.warning-panel {
   border: 1px solid rgb(8 47 73 / 10%);
   border-radius: 8px;
   background: rgb(255 255 255 / 80%);
@@ -412,6 +416,67 @@ button:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+.warning-card {
+  border: 1px solid rgb(8 47 73 / 12%);
+  border-radius: 8px;
+  background: #f8fafc;
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+}
+
+.warning-card-prominent {
+  margin-top: 22px;
+}
+
+.warning-card-critical {
+  background: #fff1f2;
+  border-color: #fecdd3;
+}
+
+.warning-card-warning {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.warning-card-guidance {
+  background: #ecfeff;
+  border-color: rgb(0 191 255 / 28%);
+}
+
+.warning-label {
+  color: #9f1239;
+  font-size: 0.78rem;
+  font-weight: 900;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.warning-card h3,
+.warning-card p {
+  margin: 0;
+}
+
+.warning-card h3 {
+  font-size: 1.05rem;
+}
+
+.warning-card p {
+  color: #31576b;
+}
+
+.warning-amount {
+  color: #082f49;
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.warning-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
 .dashboard-breakdown dl {
   display: grid;
   gap: 10px;
@@ -436,6 +501,21 @@ button:focus-visible {
   font-variant-numeric: tabular-nums;
   font-weight: 900;
   margin: 0;
+}
+
+.breakdown-note,
+.refinement-panel p:last-child {
+  color: #31576b;
+  margin: 16px 0 0;
+}
+
+.refinement-panel {
+  background: #ecfeff;
+}
+
+.refinement-panel h2 {
+  font-size: 1.45rem;
+  line-height: 1.1;
 }
 
 @media (min-width: 760px) {
