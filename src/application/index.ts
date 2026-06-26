@@ -156,6 +156,14 @@ export interface MarkCommitmentPaidInput {
   note?: string;
 }
 
+export interface UpdateCommitmentTemplateInput
+  extends Partial<
+    Pick<
+      CommitmentTemplate,
+      "name" | "kind" | "amount" | "active" | "startsOn" | "endsOn" | "recurrence" | "categoryId"
+    >
+  > {}
+
 export interface ConfirmIncomeReceivedInput {
   date: DateOnly;
   amount: Money;
@@ -269,6 +277,65 @@ export function logSpending(
   });
 }
 
+export function addCommitmentTemplate(
+  plan: BudgetPlan,
+  input: CommitmentTemplateDraft,
+  services: ApplicationServices,
+): BudgetPlan {
+  const timestamp = services.now();
+  const commitment = createCommitmentTemplate(input, timestamp, services);
+
+  return updatePlan(plan, timestamp, {
+    plannedRecords: {
+      ...plan.plannedRecords,
+      commitmentTemplates: [
+        ...plan.plannedRecords.commitmentTemplates,
+        commitment,
+      ],
+    },
+  });
+}
+
+export function updateCommitmentTemplate(
+  plan: BudgetPlan,
+  commitmentTemplateId: EntityId,
+  input: UpdateCommitmentTemplateInput,
+  services: ApplicationServices,
+): BudgetPlan {
+  const timestamp = services.now();
+  let found = false;
+  const commitmentTemplates = plan.plannedRecords.commitmentTemplates.map(
+    (commitment) => {
+      if (commitment.id !== commitmentTemplateId) {
+        return commitment;
+      }
+
+      found = true;
+
+      return {
+        ...commitment,
+        ...input,
+        updatedAt: timestamp,
+        recurrence:
+          input.recurrence === undefined
+            ? { ...commitment.recurrence }
+            : { ...input.recurrence },
+      };
+    },
+  );
+
+  if (!found) {
+    throw new RangeError(`Commitment template ${commitmentTemplateId} was not found.`);
+  }
+
+  return updatePlan(plan, timestamp, {
+    plannedRecords: {
+      ...plan.plannedRecords,
+      commitmentTemplates,
+    },
+  });
+}
+
 export function markCommitmentPaid(
   plan: BudgetPlan,
   input: MarkCommitmentPaidInput,
@@ -276,14 +343,20 @@ export function markCommitmentPaid(
 ): BudgetPlan {
   assertDateInsideActivePeriod(input.date, plan.activePeriod);
   const timestamp = services.now();
-  const amount =
-    input.amount ??
-    remainingCommitmentAmount(
-      plan,
-      input.commitmentTemplateId,
-      input.occurrenceDate,
-      input.date,
+  const remainingAmount = remainingCommitmentAmount(
+    plan,
+    input.commitmentTemplateId,
+    input.occurrenceDate,
+    input.date,
+  );
+  const amount = input.amount ?? remainingAmount;
+
+  if (amount > remainingAmount) {
+    throw new RangeError(
+      "Payment cannot be more than the remaining commitment amount.",
     );
+  }
+
   const event: FinancialEventRecord = {
     id: services.generateId("financial-event"),
     createdAt: timestamp,
