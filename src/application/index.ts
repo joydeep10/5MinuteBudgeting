@@ -121,6 +121,20 @@ export interface RecordSavingsContributionInput {
   note?: string;
 }
 
+export interface CorrectFinancialEventInput {
+  id: EntityId;
+  date?: DateOnly;
+  amount?: Money;
+  categoryId?: EntityId;
+  incomeTemplateId?: EntityId;
+  savingsGoalId?: EntityId;
+  note?: string;
+}
+
+export interface DeleteFinancialEventInput {
+  id: EntityId;
+}
+
 export interface RollBudgetPlanPeriodForwardInput {
   newActivePeriod: ActiveBudgetPeriod;
   confirmedAvailableMoney: Money;
@@ -295,6 +309,57 @@ export function recordSavingsContribution(
 
   return updatePlan(plan, timestamp, {
     financialEvents: appendFinancialEvent(plan, event),
+  });
+}
+
+export function correctFinancialEvent(
+  plan: BudgetPlan,
+  input: CorrectFinancialEventInput,
+  services: ApplicationServices,
+): BudgetPlan {
+  const existing = plan.financialEvents.find((event) => event.id === input.id);
+
+  if (existing === undefined) {
+    throw new RangeError(`Financial event ${input.id} was not found.`);
+  }
+
+  const date = input.date ?? existing.date;
+
+  assertDateInsideActivePeriod(date, plan.activePeriod);
+
+  const timestamp = services.now();
+
+  return updatePlan(plan, timestamp, {
+    financialEvents: plan.financialEvents.map((event) =>
+      event.id === input.id
+        ? {
+            ...event,
+            updatedAt: timestamp,
+            date,
+            amount: input.amount ?? event.amount,
+            categoryId: input.categoryId ?? event.categoryId,
+            incomeTemplateId: input.incomeTemplateId ?? event.incomeTemplateId,
+            savingsGoalId: input.savingsGoalId ?? event.savingsGoalId,
+            note: input.note ?? event.note,
+          }
+        : event,
+    ),
+  });
+}
+
+export function deleteFinancialEvent(
+  plan: BudgetPlan,
+  input: DeleteFinancialEventInput,
+  services: ApplicationServices,
+): BudgetPlan {
+  if (!plan.financialEvents.some((event) => event.id === input.id)) {
+    throw new RangeError(`Financial event ${input.id} was not found.`);
+  }
+
+  return updatePlan(plan, services.now(), {
+    financialEvents: plan.financialEvents.filter(
+      (event) => event.id !== input.id,
+    ),
   });
 }
 

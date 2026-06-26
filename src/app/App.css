@@ -231,7 +231,8 @@ h2 {
 .dashboard-hero,
 .dashboard-breakdown,
 .refinement-panel,
-.warning-panel {
+.warning-panel,
+.daily-actions-panel {
   margin: 0 auto;
   max-width: 1120px;
   width: 100%;
@@ -261,7 +262,8 @@ h2 {
 .dashboard-hero,
 .dashboard-breakdown,
 .refinement-panel,
-.warning-panel {
+.warning-panel,
+.daily-actions-panel {
   border: 1px solid rgb(8 47 73 / 10%);
   border-radius: 8px;
   background: rgb(255 255 255 / 80%);
@@ -477,6 +479,69 @@ button:focus-visible {
   margin-top: 18px;
 }
 
+.daily-actions-heading {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+}
+
+.daily-actions-heading h2 {
+  font-size: 1.45rem;
+  line-height: 1.1;
+}
+
+.daily-action-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.daily-action-form h3 {
+  font-size: 1.05rem;
+}
+
+.recent-activity {
+  border-top: 1px solid rgb(8 47 73 / 10%);
+  margin-top: 20px;
+  padding-top: 18px;
+}
+
+.recent-activity h3 {
+  font-size: 1.05rem;
+}
+
+.recent-activity p,
+.recent-activity ul {
+  margin: 12px 0 0;
+}
+
+.recent-activity ul {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+}
+
+.recent-activity li {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid rgb(8 47 73 / 10%);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.recent-activity strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-action {
+  padding: 0;
+}
+
 .dashboard-breakdown dl {
   display: grid;
   gap: 10px;
@@ -556,5 +621,18 @@ button:focus-visible {
 
   .result-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .daily-actions-heading {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .daily-action-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .daily-action-form h3,
+  .daily-action-form .button {
+    grid-column: 1 / -1;
   }
 }
