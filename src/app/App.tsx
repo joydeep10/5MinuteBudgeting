@@ -1,8 +1,15 @@
 import { useState } from "react";
 
 import type { ApplicationServices } from "../application";
-import { calculateSafeToSpend } from "../domain";
-import type { BudgetMode, BudgetPlan, DateOnly, Money } from "../domain";
+import { calculateSafeToSpend, calculateSpendingLoggedThisPeriod } from "../domain";
+import type {
+  BudgetMode,
+  BudgetPlan,
+  BudgetWarning,
+  CurrencyMetadata,
+  DateOnly,
+  Money,
+} from "../domain";
 import {
   completeSetupWizard,
   estimateSetupWizardResult,
@@ -633,6 +640,11 @@ interface DashboardProps {
 function Dashboard({ plan, today }: DashboardProps) {
   const result = calculateSafeToSpend({ plan, today });
   const money = (amount: Money) => formatMoney(amount, plan.currency);
+  const spendingLoggedThisPeriod = calculateSpendingLoggedThisPeriod(plan);
+  const shouldInviteRefinement = budgetCouldUseRefinement(plan);
+  const warnings = rankedBudgetWarnings(result.warnings);
+  const topWarning = warnings[0];
+  const remainingWarnings = warnings.slice(1);
 
   return (
     <main className="app-shell dashboard-shell">
@@ -650,6 +662,13 @@ function Dashboard({ plan, today }: DashboardProps) {
             <strong>{money(result.confirmed.safeThisPeriod)}</strong>
           </article>
         </div>
+        {topWarning === undefined ? null : (
+          <BudgetWarningCard
+            currency={plan.currency}
+            prominent
+            warning={topWarning}
+          />
+        )}
       </section>
 
       <section className="dashboard-breakdown" aria-labelledby="breakdown-title">
@@ -672,10 +691,174 @@ function Dashboard({ plan, today }: DashboardProps) {
             <dt>Safety buffer</dt>
             <dd>{money(result.breakdown.fixedBuffer)}</dd>
           </div>
+          <div>
+            <dt>Spending logged this period</dt>
+            <dd>{money(spendingLoggedThisPeriod)}</dd>
+          </div>
         </dl>
+        <p className="breakdown-note">
+          Spending and payments are already reflected in available money.
+        </p>
       </section>
+
+      {shouldInviteRefinement ? (
+        <section className="refinement-panel" aria-labelledby="refinement-title">
+          <p className="section-kicker">Refine this budget</p>
+          <h2 id="refinement-title">Ready when you are</h2>
+          <p>
+            Your budget is ready to use. Add commitments, protected savings, or a buffer when you want a sharper number.
+          </p>
+        </section>
+      ) : null}
+
+      {remainingWarnings.length === 0 ? null : (
+        <section className="warning-panel" aria-labelledby="warning-panel-title">
+          <p className="section-kicker">Keep an eye on</p>
+          <h2 id="warning-panel-title">More budget warnings</h2>
+          <div className="warning-list">
+            {remainingWarnings.map((warning) => (
+              <BudgetWarningCard
+                currency={plan.currency}
+                key={warning.id}
+                warning={warning}
+              />
+            ))}
+          </div>
+        </section>
+      )}
     </main>
   );
+}
+
+function budgetCouldUseRefinement(plan: BudgetPlan): boolean {
+  return (
+    plan.fixedBuffer === 0 &&
+    plan.plannedRecords.commitmentTemplates.length === 0 &&
+    plan.plannedRecords.savingsGoals.length === 0
+  );
+}
+
+function rankedBudgetWarnings(
+  warnings: readonly BudgetWarning[],
+): BudgetWarning[] {
+  return warnings
+    .map((warning, index) => ({ warning, index }))
+    .sort((left, right) => {
+      const severityComparison =
+        warningSeverityRank(right.warning) - warningSeverityRank(left.warning);
+
+      if (severityComparison !== 0) {
+        return severityComparison;
+      }
+
+      return left.index - right.index;
+    })
+    .map(({ warning }) => warning);
+}
+
+function warningSeverityRank(warning: BudgetWarning): number {
+  if (warning.severity === "critical") {
+    return 3;
+  }
+
+  if (warning.severity === "warning") {
+    return 2;
+  }
+
+  return 1;
+}
+
+interface BudgetWarningCardProps {
+  warning: BudgetWarning;
+  currency: CurrencyMetadata;
+  prominent?: boolean;
+}
+
+function BudgetWarningCard({
+  warning,
+  currency,
+  prominent = false,
+}: BudgetWarningCardProps) {
+  const copy = budgetWarningCopy(warning, currency);
+
+  return (
+    <article
+      className={[
+        "warning-card",
+        `warning-card-${warning.severity}`,
+        prominent ? "warning-card-prominent" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      role={prominent ? "status" : undefined}
+    >
+      {prominent ? <p className="warning-label">Top priority</p> : null}
+      <h3>{copy.headline}</h3>
+      <p>{copy.action}</p>
+      {copy.amount === undefined ? null : (
+        <strong className="warning-amount">{copy.amount}</strong>
+      )}
+    </article>
+  );
+}
+
+function budgetWarningCopy(
+  warning: BudgetWarning,
+  currency: CurrencyMetadata,
+): { headline: string; action: string; amount?: string } {
+  const amount = warningAmount(warning);
+  const formattedAmount =
+    amount === undefined ? undefined : formatMoney(amount, currency);
+
+  if (warning.code === "critical-shortfall") {
+    return {
+      headline: "Budget shortfall",
+      action:
+        "Your plan is short before today's spending. Update your balance or reduce commitments before spending.",
+      amount: formattedAmount,
+    };
+  }
+
+  if (warning.code === "overdue-commitment") {
+    return {
+      headline: "A commitment is overdue",
+      action: "Settle or update this overdue commitment before spending more.",
+      amount: formattedAmount,
+    };
+  }
+
+  if (warning.code === "commitment-due-today") {
+    return {
+      headline: "A commitment is due today",
+      action: "Pay it, mark it paid, or adjust the commitment if it changed.",
+      amount: formattedAmount,
+    };
+  }
+
+  if (warning.code === "overdue-savings-goal") {
+    return {
+      headline: "A protected savings goal is overdue",
+      action: "Review this goal so protected savings stay realistic.",
+      amount: formattedAmount,
+    };
+  }
+
+  return {
+    headline: "Category spending is over guidance",
+    action:
+      "Use this as guidance for the rest of the period; it does not reduce safe-to-spend by itself.",
+    amount: formattedAmount,
+  };
+}
+
+function warningAmount(warning: BudgetWarning): Money | undefined {
+  const candidate =
+    warning.metadata.shortfallAmount ??
+    warning.metadata.remainingUnpaidAmount ??
+    warning.metadata.remainingAmount ??
+    warning.metadata.overageAmount;
+
+  return typeof candidate === "number" ? candidate : undefined;
 }
 
 function EmptyDashboard({
