@@ -2,14 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import {
   addCommitmentTemplate,
+  addCustomCategory,
+  addSavingsGoal,
   confirmIncomeReceived,
   createBudgetPlan,
+  defaultFlexibleCategoryDrafts,
   logSpending,
   markCommitmentPaid,
   recordBalanceSnapshot,
   recordSavingsContribution,
+  setFlexibleCategoryGuidance,
   updateCommitmentTemplate,
+  updateSavingsGoal,
 } from "../src/application";
+import { calculateSafeToSpend } from "../src/domain";
 import type { Money } from "../src/domain";
 
 const money = (minorUnits: number): Money => minorUnits;
@@ -411,5 +417,142 @@ describe("application BudgetPlan use cases", () => {
         anchorDate: "2026-06-16",
       },
     });
+  });
+
+  it("protects newly created savings goals by default and updates safe-to-spend when protection changes", () => {
+    const services = testServices();
+    const plan = createBudgetPlan(
+      {
+        mode: "general",
+        currency: {
+          code: "USD",
+          decimalPlaces: 2,
+        },
+        activePeriod: {
+          startDate: "2026-06-01",
+          endDate: "2026-06-30",
+        },
+        fixedBuffer: money(0),
+        startingAvailableMoney: money(100_000),
+      },
+      services,
+    );
+
+    const withGoal = addSavingsGoal(
+      plan,
+      {
+        name: "Emergency fund",
+        targetAmount: money(60_000),
+        currentAmount: money(0),
+        periodContributionOverride: money(30_000),
+      },
+      services,
+    );
+
+    expect(withGoal.plannedRecords.savingsGoals[0]).toMatchObject({
+      id: "savings-goal_3",
+      name: "Emergency fund",
+      status: "active",
+      protected: true,
+      periodContributionOverride: 30_000,
+    });
+    expect(
+      calculateSafeToSpend({
+        plan: withGoal,
+        today: "2026-06-01",
+      }).breakdown.protectedSavings,
+    ).toBe(30_000);
+
+    const informationalGoal = updateSavingsGoal(
+      withGoal,
+      {
+        savingsGoalId: "savings-goal_3",
+        protected: false,
+      },
+      services,
+    );
+
+    expect(informationalGoal.plannedRecords.savingsGoals[0]?.protected).toBe(
+      false,
+    );
+    expect(
+      calculateSafeToSpend({
+        plan: informationalGoal,
+        today: "2026-06-01",
+      }).breakdown.protectedSavings,
+    ).toBe(0);
+    expect(
+      calculateSafeToSpend({
+        plan: informationalGoal,
+        today: "2026-06-01",
+      }).confirmed.rawSafePool,
+    ).toBe(100_000);
+  });
+
+  it("adds default and custom categories with optional guidance that does not reduce safe-to-spend", () => {
+    const services = testServices();
+    const plan = createBudgetPlan(
+      {
+        mode: "general",
+        currency: {
+          code: "USD",
+          decimalPlaces: 2,
+        },
+        activePeriod: {
+          startDate: "2026-06-01",
+          endDate: "2026-06-30",
+        },
+        fixedBuffer: money(0),
+        startingAvailableMoney: money(100_000),
+        defaultCategories: defaultFlexibleCategoryDrafts(),
+      },
+      services,
+    );
+
+    const withCustomCategory = addCustomCategory(
+      plan,
+      {
+        name: "Pet care",
+      },
+      services,
+    );
+    const customCategory = withCustomCategory.plannedRecords.categories.at(-1);
+    const withGuidance = setFlexibleCategoryGuidance(
+      withCustomCategory,
+      {
+        categoryId: customCategory?.id ?? "",
+        periodLimit: money(12_000),
+      },
+      services,
+    );
+
+    expect(plan.plannedRecords.categories.map(({ name }) => name)).toEqual([
+      "Food",
+      "Transport",
+      "Shopping",
+      "Health",
+      "Entertainment",
+      "Other",
+    ]);
+    expect(customCategory).toMatchObject({
+      id: "category_9",
+      name: "Pet care",
+      kind: "custom",
+      archived: false,
+    });
+    expect(withGuidance.plannedRecords.flexibleCategoryGuidance).toEqual([
+      expect.objectContaining({
+        id: "category-guidance_10",
+        categoryId: "category_9",
+        periodLimit: 12_000,
+        reserved: false,
+      }),
+    ]);
+    expect(
+      calculateSafeToSpend({
+        plan: withGuidance,
+        today: "2026-06-01",
+      }).confirmed.rawSafePool,
+    ).toBe(100_000);
   });
 });

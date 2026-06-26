@@ -1,13 +1,20 @@
 import { useState } from "react";
 
-import type { ApplicationServices, CommitmentTemplateDraft } from "../application";
 import {
   addCommitmentTemplate,
+  addCustomCategory,
+  addSavingsGoal,
   markCommitmentPaid,
+  recordSavingsContribution,
+  setFlexibleCategoryGuidance,
   updateCommitmentTemplate,
+  updateSavingsGoal,
 } from "../application";
+import type { ApplicationServices, CommitmentTemplateDraft } from "../application";
 import {
+  calculateCategorySummaries,
   calculateSafeToSpend,
+  calculateSavingsGoalAllocations,
   calculateSpendingLoggedThisPeriod,
   generateCommitmentOccurrences,
 } from "../domain";
@@ -15,6 +22,7 @@ import type {
   BudgetMode,
   BudgetPlan,
   BudgetWarning,
+  CategorySummary,
   CommitmentOccurrence,
   CommitmentTemplate,
   CurrencyMetadata,
@@ -23,6 +31,7 @@ import type {
   Money,
   RecurrenceFrequency,
   RecurrenceRule,
+  SavingsGoalStatus,
 } from "../domain";
 import {
   completeSetupWizard,
@@ -678,6 +687,8 @@ function Dashboard({
     financialEvents: plan.financialEvents,
     amountOverrides: [],
   });
+  const savingsGoalAllocations = calculateSavingsGoalAllocations(plan);
+  const categorySummaries = calculateCategorySummaries(plan);
   const shouldInviteRefinement = budgetCouldUseRefinement(plan);
   const warnings = rankedBudgetWarnings(result.warnings);
   const topWarning = warnings[0];
@@ -687,6 +698,10 @@ function Dashboard({
     onPlanChange(nextPlan);
     setWorkflowMessage(message);
     await repository?.saveActivePlan(nextPlan);
+  }
+
+  function changePlan(nextPlan: BudgetPlan) {
+    void savePlan(nextPlan, "Budget workflow updated.");
   }
 
   async function submitCommitmentPayment(
@@ -928,6 +943,23 @@ function Dashboard({
         </section>
       ) : null}
 
+      <SavingsGoalsPanel
+        allocations={savingsGoalAllocations}
+        currency={plan.currency}
+        plan={plan}
+        services={services}
+        today={today}
+        onPlanChange={changePlan}
+      />
+
+      <CategoryGuidancePanel
+        categorySummaries={categorySummaries}
+        currency={plan.currency}
+        plan={plan}
+        services={services}
+        onPlanChange={changePlan}
+      />
+
       {remainingWarnings.length === 0 ? null : (
         <section className="warning-panel" aria-labelledby="warning-panel-title">
           <p className="section-kicker">Keep an eye on</p>
@@ -944,6 +976,468 @@ function Dashboard({
         </section>
       )}
     </main>
+  );
+}
+
+interface SavingsGoalsPanelProps {
+  allocations: ReturnType<typeof calculateSavingsGoalAllocations>;
+  currency: CurrencyMetadata;
+  plan: BudgetPlan;
+  services: ApplicationServices;
+  today: DateOnly;
+  onPlanChange: (plan: BudgetPlan) => void;
+}
+
+function SavingsGoalsPanel({
+  allocations,
+  currency,
+  plan,
+  services,
+  today,
+  onPlanChange,
+}: SavingsGoalsPanelProps) {
+  const money = (amount: Money) => formatMoney(amount, currency);
+
+  function createGoal(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const protectedValue = formData.get("goal-protected") === "on";
+
+    onPlanChange(
+      addSavingsGoal(
+        plan,
+        {
+          name: requiredFormString(formData, "goal-name"),
+          targetAmount: parseDashboardMoney(
+            requiredFormString(formData, "goal-target"),
+            currency,
+            "Target amount",
+          ),
+          currentAmount: parseDashboardMoney(
+            formString(formData, "goal-current") || "0",
+            currency,
+            "Current saved amount",
+          ),
+          targetDate: optionalFormString(formData, "goal-target-date"),
+          protected: protectedValue,
+          periodContributionOverride: optionalMoneyField(
+            formData,
+            "goal-period-contribution",
+            currency,
+            "Period contribution",
+          ),
+        },
+        services,
+      ),
+    );
+    event.currentTarget.reset();
+  }
+
+  function saveGoal(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+
+    onPlanChange(
+      updateSavingsGoal(
+        plan,
+        {
+          savingsGoalId: requiredFormString(formData, "savings-goal-id"),
+          name: requiredFormString(formData, "goal-name"),
+          targetAmount: parseDashboardMoney(
+            requiredFormString(formData, "goal-target"),
+            currency,
+            "Target amount",
+          ),
+          currentAmount: parseDashboardMoney(
+            requiredFormString(formData, "goal-current"),
+            currency,
+            "Current saved amount",
+          ),
+          targetDate: optionalFormString(formData, "goal-target-date"),
+          protected: formData.get("goal-protected") === "on",
+          periodContributionOverride: optionalMoneyField(
+            formData,
+            "goal-period-contribution",
+            currency,
+            "Period contribution",
+          ),
+        },
+        services,
+      ),
+    );
+  }
+
+  function setGoalStatus(goalId: string, status: SavingsGoalStatus) {
+    onPlanChange(
+      updateSavingsGoal(
+        plan,
+        {
+          savingsGoalId: goalId,
+          status,
+        },
+        services,
+      ),
+    );
+  }
+
+  function recordContribution(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+
+    onPlanChange(
+      recordSavingsContribution(
+        plan,
+        {
+          savingsGoalId: requiredFormString(formData, "contribution-goal-id"),
+          date: optionalFormString(formData, "contribution-date") ?? today,
+          amount: parseDashboardMoney(
+            requiredFormString(formData, "contribution-amount"),
+            currency,
+            "Contribution amount",
+          ),
+          note: optionalFormString(formData, "contribution-note"),
+        },
+        services,
+      ),
+    );
+    event.currentTarget.reset();
+  }
+
+  return (
+    <section className="workflow-panel" aria-labelledby="savings-goals-title">
+      <div className="workflow-heading">
+        <p className="section-kicker">Savings workflow</p>
+        <h2 id="savings-goals-title">Savings goals</h2>
+        <p>
+          Protected savings means set this money aside before calculating what I can spend.
+          Turning protection off makes the goal informational only.
+        </p>
+      </div>
+
+      <form className="workflow-form" aria-label="Create savings goal" onSubmit={createGoal}>
+        <label>
+          Goal name
+          <input name="goal-name" required />
+        </label>
+        <label>
+          Target amount
+          <input inputMode="decimal" name="goal-target" required />
+        </label>
+        <label>
+          Current saved amount
+          <input defaultValue="0" inputMode="decimal" name="goal-current" />
+        </label>
+        <label>
+          Target date
+          <input name="goal-target-date" type="date" />
+        </label>
+        <label>
+          Period contribution
+          <input inputMode="decimal" name="goal-period-contribution" />
+        </label>
+        <label className="inline-choice">
+          <input defaultChecked name="goal-protected" type="checkbox" />
+          Protected
+        </label>
+        <button className="button button-primary" type="submit">
+          Create savings goal
+        </button>
+      </form>
+
+      {plan.plannedRecords.savingsGoals.length === 0 ? (
+        <p className="empty-workflow-note">
+          Add a protected goal when you want savings reflected before spending.
+        </p>
+      ) : (
+        <div className="goal-list">
+          {plan.plannedRecords.savingsGoals.map((goal) => {
+            const allocation = allocations.find(
+              (candidate) => candidate.goalId === goal.id,
+            );
+
+            return (
+              <article className="goal-row" key={goal.id}>
+                <div>
+                  <h3>{goal.name}</h3>
+                  <p>
+                    {goal.protected ? "Protected" : "Informational only"} - {goal.status}
+                  </p>
+                  {allocation === undefined ? null : (
+                    <dl className="mini-metrics">
+                      <div>
+                        <dt>Progress</dt>
+                        <dd>{money(allocation.progressAmount)}</dd>
+                      </div>
+                      <div>
+                        <dt>Remaining</dt>
+                        <dd>{money(allocation.remainingAmount)}</dd>
+                      </div>
+                      <div>
+                        <dt>Protected this period</dt>
+                        <dd>{money(allocation.remainingProtectedDeduction)}</dd>
+                      </div>
+                    </dl>
+                  )}
+                </div>
+
+                <form className="workflow-form compact-form" onSubmit={saveGoal}>
+                  <input name="savings-goal-id" type="hidden" value={goal.id} />
+                  <label>
+                    Goal name
+                    <input name="goal-name" defaultValue={goal.name} required />
+                  </label>
+                  <label>
+                    Target amount
+                    <input
+                      inputMode="decimal"
+                      name="goal-target"
+                      defaultValue={moneyInputValue(goal.targetAmount, currency)}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Current saved amount
+                    <input
+                      inputMode="decimal"
+                      name="goal-current"
+                      defaultValue={moneyInputValue(goal.currentAmount, currency)}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Target date
+                    <input
+                      name="goal-target-date"
+                      type="date"
+                      defaultValue={goal.targetDate ?? ""}
+                    />
+                  </label>
+                  <label>
+                    Period contribution
+                    <input
+                      inputMode="decimal"
+                      name="goal-period-contribution"
+                      defaultValue={
+                        goal.periodContributionOverride === undefined
+                          ? ""
+                          : moneyInputValue(goal.periodContributionOverride, currency)
+                      }
+                    />
+                  </label>
+                  <label className="inline-choice">
+                    <input
+                      defaultChecked={goal.protected}
+                      name="goal-protected"
+                      type="checkbox"
+                    />
+                    Protected
+                  </label>
+                  <button className="button button-secondary" type="submit">
+                    Save goal changes
+                  </button>
+                </form>
+
+                <div className="action-row" aria-label={`${goal.name} status actions`}>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() =>
+                      setGoalStatus(
+                        goal.id,
+                        goal.status === "paused" ? "active" : "paused",
+                      )
+                    }
+                  >
+                    {goal.status === "paused" ? "Resume goal" : "Pause goal"}
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => setGoalStatus(goal.id, "completed")}
+                  >
+                    Complete goal
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => setGoalStatus(goal.id, "archived")}
+                  >
+                    Archive goal
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      <form
+        className="workflow-form contribution-form"
+        aria-label="Record savings contribution"
+        onSubmit={recordContribution}
+      >
+        <label>
+          Amount
+          <input inputMode="decimal" name="contribution-amount" required />
+        </label>
+        <label>
+          Savings goal
+          <select name="contribution-goal-id" required>
+            {plan.plannedRecords.savingsGoals.map((goal) => (
+              <option key={goal.id} value={goal.id}>
+                {goal.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Date
+          <input defaultValue={today} name="contribution-date" type="date" />
+        </label>
+        <label>
+          Note
+          <input name="contribution-note" />
+        </label>
+        <button className="button button-primary" type="submit">
+          Record contribution
+        </button>
+      </form>
+    </section>
+  );
+}
+
+interface CategoryGuidancePanelProps {
+  categorySummaries: readonly CategorySummary[];
+  currency: CurrencyMetadata;
+  plan: BudgetPlan;
+  services: ApplicationServices;
+  onPlanChange: (plan: BudgetPlan) => void;
+}
+
+function CategoryGuidancePanel({
+  categorySummaries,
+  currency,
+  plan,
+  services,
+  onPlanChange,
+}: CategoryGuidancePanelProps) {
+  const money = (amount: Money) => formatMoney(amount, currency);
+
+  function createCustomCategory(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+
+    onPlanChange(
+      addCustomCategory(
+        plan,
+        {
+          name: requiredFormString(formData, "custom-category-name"),
+        },
+        services,
+      ),
+    );
+    event.currentTarget.reset();
+  }
+
+  function saveGuidance(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+
+    onPlanChange(
+      setFlexibleCategoryGuidance(
+        plan,
+        {
+          categoryId: requiredFormString(formData, "guidance-category-id"),
+          periodLimit: parseDashboardMoney(
+            requiredFormString(formData, "guidance-period-limit"),
+            currency,
+            "Guidance amount",
+          ),
+        },
+        services,
+      ),
+    );
+    event.currentTarget.reset();
+  }
+
+  return (
+    <section className="workflow-panel" aria-labelledby="category-guidance-title">
+      <div className="workflow-heading">
+        <p className="section-kicker">Spending patterns</p>
+        <h2 id="category-guidance-title">Category guidance</h2>
+        <p>
+          Optional visual guidance helps you compare spending patterns and does not reduce safe-to-spend.
+        </p>
+      </div>
+
+      <div className="category-list" aria-label="Category guidance summaries">
+        {plan.plannedRecords.categories.map((category) => {
+          const summary = categorySummaries.find(
+            (candidate) => candidate.categoryId === category.id,
+          );
+          const limit = summary?.periodLimit;
+          const spentAmount = summary?.spentAmount ?? 0;
+          const progress =
+            limit === undefined || limit === 0
+              ? 0
+              : Math.min(100, Math.round((spentAmount / limit) * 100));
+
+          return (
+            <article className="category-row" key={category.id}>
+              <div>
+                <h3>{category.name}</h3>
+                <p>{category.kind === "custom" ? "Custom category" : "Default category"}</p>
+              </div>
+              <div className="guidance-meter" aria-label={`${category.name} guidance`}>
+                <span style={{ width: `${progress}%` }} />
+              </div>
+              <p>
+                {money(spentAmount)}
+                {limit === undefined ? " spent" : ` of ${money(limit)} guidance`}
+              </p>
+            </article>
+          );
+        })}
+      </div>
+
+      <form
+        className="workflow-form"
+        aria-label="Add custom category"
+        onSubmit={createCustomCategory}
+      >
+        <label>
+          Custom category name
+          <input name="custom-category-name" required />
+        </label>
+        <button className="button button-secondary" type="submit">
+          Add custom category
+        </button>
+      </form>
+
+      <form
+        className="workflow-form"
+        aria-label="Set category guidance"
+        onSubmit={saveGuidance}
+      >
+        <label>
+          Category
+          <select name="guidance-category-id" required>
+            {plan.plannedRecords.categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Period guidance amount
+          <input inputMode="decimal" name="guidance-period-limit" required />
+        </label>
+        <button className="button button-secondary" type="submit">
+          Set guidance
+        </button>
+      </form>
+    </section>
   );
 }
 
@@ -1182,6 +1676,70 @@ function budgetCouldUseRefinement(plan: BudgetPlan): boolean {
     plan.plannedRecords.commitmentTemplates.length === 0 &&
     plan.plannedRecords.savingsGoals.length === 0
   );
+}
+
+function requiredFormString(formData: FormData, name: string): string {
+  const value = formString(formData, name).trim();
+
+  if (value === "") {
+    throw new RangeError(`${name} is required.`);
+  }
+
+  return value;
+}
+
+function optionalFormString(formData: FormData, name: string): string | undefined {
+  const value = formString(formData, name).trim();
+
+  return value === "" ? undefined : value;
+}
+
+function formString(formData: FormData, name: string): string {
+  const value = formData.get(name);
+
+  return typeof value === "string" ? value : "";
+}
+
+function optionalMoneyField(
+  formData: FormData,
+  name: string,
+  currency: CurrencyMetadata,
+  fieldName: string,
+): Money | undefined {
+  const value = optionalFormString(formData, name);
+
+  return value === undefined
+    ? undefined
+    : parseDashboardMoney(value, currency, fieldName);
+}
+
+function parseDashboardMoney(
+  input: string,
+  currency: CurrencyMetadata,
+  fieldName: string,
+): Money {
+  const cleaned = input.trim().replace(/,/g, "").replace(currency.symbol ?? "", "");
+
+  if (!/^\d+(\.\d+)?$/.test(cleaned)) {
+    throw new RangeError(`${fieldName} must be a valid money amount.`);
+  }
+
+  const [whole = "0", fraction = ""] = cleaned.split(".");
+
+  if (fraction.length > currency.decimalPlaces) {
+    throw new RangeError(
+      `${fieldName} can include at most ${currency.decimalPlaces} decimal places.`,
+    );
+  }
+
+  return (
+    Number(whole) * 10 ** currency.decimalPlaces +
+    Number(fraction.padEnd(currency.decimalPlaces, "0"))
+  );
+}
+
+function moneyInputValue(amount: Money, currency: CurrencyMetadata): string {
+  return (amount / 10 ** currency.decimalPlaces).toFixed(currency.decimalPlaces);
 }
 
 function rankedBudgetWarnings(

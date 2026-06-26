@@ -90,6 +90,14 @@ describe("first-use setup wizard", () => {
       amount: 30_000,
       startsOn: "2026-06-28",
     });
+    expect(savedPlans[0]?.plannedRecords.categories.map(({ name }) => name)).toEqual([
+      "Food",
+      "Transport",
+      "Shopping",
+      "Health",
+      "Entertainment",
+      "Other",
+    ]);
     expect(completion.result.confirmed.safeToday).toBe(9_000);
   });
 

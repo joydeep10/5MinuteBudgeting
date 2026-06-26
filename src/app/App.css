@@ -232,7 +232,8 @@ h2 {
 .dashboard-breakdown,
 .commitments-panel,
 .refinement-panel,
-.warning-panel {
+.warning-panel,
+.workflow-panel {
   margin: 0 auto;
   max-width: 1120px;
   width: 100%;
@@ -263,7 +264,8 @@ h2 {
 .dashboard-breakdown,
 .commitments-panel,
 .refinement-panel,
-.warning-panel {
+.warning-panel,
+.workflow-panel {
   border: 1px solid rgb(8 47 73 / 10%);
   border-radius: 8px;
   background: rgb(255 255 255 / 80%);
@@ -647,6 +649,97 @@ button:focus-visible {
   line-height: 1.1;
 }
 
+.workflow-panel {
+  display: grid;
+  gap: 20px;
+}
+
+.workflow-heading p:last-child,
+.empty-workflow-note,
+.goal-row p,
+.category-row p {
+  color: #31576b;
+  margin: 10px 0 0;
+}
+
+.workflow-heading h2 {
+  font-size: 1.8rem;
+  line-height: 1.1;
+}
+
+.workflow-form {
+  display: grid;
+  gap: 12px;
+}
+
+.workflow-form .button {
+  width: fit-content;
+}
+
+.goal-list,
+.category-list {
+  display: grid;
+  gap: 14px;
+}
+
+.goal-row,
+.category-row {
+  border: 1px solid rgb(8 47 73 / 10%);
+  border-radius: 8px;
+  background: #f8fafc;
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.mini-metrics {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.mini-metrics div {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.mini-metrics dt {
+  color: #31576b;
+  font-weight: 800;
+}
+
+.mini-metrics dd {
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  margin: 0;
+}
+
+.compact-form {
+  border-top: 1px solid rgb(8 47 73 / 10%);
+  padding-top: 16px;
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.guidance-meter {
+  background: rgb(8 47 73 / 10%);
+  border-radius: 999px;
+  height: 10px;
+  overflow: hidden;
+}
+
+.guidance-meter span {
+  background: #00bfff;
+  display: block;
+  height: 100%;
+}
+
 @media (min-width: 760px) {
   .app-shell {
     padding: 40px;
@@ -685,6 +778,27 @@ button:focus-visible {
 
   .result-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workflow-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workflow-form .button {
+    align-self: end;
+  }
+
+  .contribution-form,
+  .category-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .goal-row {
+    grid-template-columns: minmax(0, 0.8fr) minmax(360px, 1.2fr);
+  }
+
+  .goal-row .action-row {
+    grid-column: 1 / -1;
   }
 
   .commitment-card {
