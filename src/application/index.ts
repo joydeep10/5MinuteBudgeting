@@ -20,6 +20,7 @@ import type {
   DateOnly,
   EntityId,
   FinancialEventRecord,
+  FlexibleCategoryGuidance,
   IncomeTemplate,
   Money,
   PeriodSnapshot,
@@ -39,6 +40,16 @@ export interface CategoryDraft {
   name: string;
   kind: CategoryKind;
   archived?: boolean;
+}
+
+export interface AddCustomCategoryInput {
+  name: string;
+}
+
+export interface SetFlexibleCategoryGuidanceInput {
+  categoryId: EntityId;
+  periodLimit: Money;
+  reserved?: boolean;
 }
 
 export interface IncomeTemplateDraft {
@@ -74,6 +85,28 @@ export interface SavingsGoalDraft {
   periodContributionOverride?: Money;
 }
 
+export interface AddSavingsGoalInput {
+  name: string;
+  targetAmount: Money;
+  currentAmount?: Money;
+  targetDate?: DateOnly;
+  protected?: boolean;
+  priority?: number;
+  periodContributionOverride?: Money;
+}
+
+export interface UpdateSavingsGoalInput {
+  savingsGoalId: EntityId;
+  name?: string;
+  targetAmount?: Money;
+  currentAmount?: Money;
+  targetDate?: DateOnly;
+  status?: SavingsGoalStatus;
+  protected?: boolean;
+  priority?: number;
+  periodContributionOverride?: Money;
+}
+
 export interface CreateBudgetPlanInput {
   mode: BudgetMode;
   currency: CurrencyMetadata;
@@ -84,6 +117,22 @@ export interface CreateBudgetPlanInput {
   initialIncomeTemplates?: readonly IncomeTemplateDraft[];
   initialCommitmentTemplates?: readonly CommitmentTemplateDraft[];
   initialSavingsGoals?: readonly SavingsGoalDraft[];
+}
+
+const defaultFlexibleCategoryNames = [
+  "Food",
+  "Transport",
+  "Shopping",
+  "Health",
+  "Entertainment",
+  "Other",
+] as const;
+
+export function defaultFlexibleCategoryDrafts(): CategoryDraft[] {
+  return defaultFlexibleCategoryNames.map((name) => ({
+    name,
+    kind: "flexible",
+  }));
 }
 
 export interface RecordBalanceSnapshotInput {
@@ -298,6 +347,142 @@ export function recordSavingsContribution(
   });
 }
 
+export function addSavingsGoal(
+  plan: BudgetPlan,
+  input: AddSavingsGoalInput,
+  services: ApplicationServices,
+): BudgetPlan {
+  const timestamp = services.now();
+  const goal = createSavingsGoal(
+    {
+      name: input.name,
+      targetAmount: input.targetAmount,
+      currentAmount: input.currentAmount ?? 0,
+      targetDate: input.targetDate,
+      status: "active",
+      protected: input.protected ?? true,
+      priority: input.priority,
+      periodContributionOverride: input.periodContributionOverride,
+    },
+    timestamp,
+    services,
+  );
+
+  return updatePlan(plan, timestamp, {
+    plannedRecords: {
+      ...plan.plannedRecords,
+      savingsGoals: [...plan.plannedRecords.savingsGoals, goal],
+    },
+  });
+}
+
+export function updateSavingsGoal(
+  plan: BudgetPlan,
+  input: UpdateSavingsGoalInput,
+  services: ApplicationServices,
+): BudgetPlan {
+  const timestamp = services.now();
+  let foundGoal = false;
+  const savingsGoals = plan.plannedRecords.savingsGoals.map((goal) => {
+    if (goal.id !== input.savingsGoalId) {
+      return goal;
+    }
+
+    foundGoal = true;
+
+    return {
+      ...goal,
+      name: input.name ?? goal.name,
+      targetAmount: input.targetAmount ?? goal.targetAmount,
+      currentAmount: input.currentAmount ?? goal.currentAmount,
+      targetDate: inputIncludes(input, "targetDate")
+        ? input.targetDate
+        : goal.targetDate,
+      status: input.status ?? goal.status,
+      protected: input.protected ?? goal.protected,
+      priority: inputIncludes(input, "priority") ? input.priority : goal.priority,
+      periodContributionOverride: inputIncludes(input, "periodContributionOverride")
+        ? input.periodContributionOverride
+        : goal.periodContributionOverride,
+      updatedAt: timestamp,
+    };
+  });
+
+  if (!foundGoal) {
+    throw new RangeError(`Savings goal ${input.savingsGoalId} was not found.`);
+  }
+
+  return updatePlan(plan, timestamp, {
+    plannedRecords: {
+      ...plan.plannedRecords,
+      savingsGoals,
+    },
+  });
+}
+
+export function addCustomCategory(
+  plan: BudgetPlan,
+  input: AddCustomCategoryInput,
+  services: ApplicationServices,
+): BudgetPlan {
+  const timestamp = services.now();
+  const category = createCategory(
+    {
+      name: input.name,
+      kind: "custom",
+    },
+    timestamp,
+    services,
+  );
+
+  return updatePlan(plan, timestamp, {
+    plannedRecords: {
+      ...plan.plannedRecords,
+      categories: [...plan.plannedRecords.categories, category],
+    },
+  });
+}
+
+export function setFlexibleCategoryGuidance(
+  plan: BudgetPlan,
+  input: SetFlexibleCategoryGuidanceInput,
+  services: ApplicationServices,
+): BudgetPlan {
+  assertCategoryExists(plan, input.categoryId);
+  const timestamp = services.now();
+  const existingGuidance = plan.plannedRecords.flexibleCategoryGuidance.find(
+    (guidance) => guidance.categoryId === input.categoryId,
+  );
+  const guidance: FlexibleCategoryGuidance =
+    existingGuidance === undefined
+      ? {
+          id: services.generateId("category-guidance"),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          categoryId: input.categoryId,
+          periodLimit: input.periodLimit,
+          reserved: input.reserved ?? false,
+        }
+      : {
+          ...existingGuidance,
+          updatedAt: timestamp,
+          periodLimit: input.periodLimit,
+          reserved: input.reserved ?? existingGuidance.reserved,
+        };
+
+  return updatePlan(plan, timestamp, {
+    plannedRecords: {
+      ...plan.plannedRecords,
+      flexibleCategoryGuidance:
+        existingGuidance === undefined
+          ? [...plan.plannedRecords.flexibleCategoryGuidance, guidance]
+          : plan.plannedRecords.flexibleCategoryGuidance.map((candidate) =>
+              candidate.id === guidance.id ? guidance : candidate,
+            ),
+    },
+  });
+}
+
 export function suggestNextActivePeriod(plan: BudgetPlan): ActiveBudgetPeriod {
   const periodLength = inclusiveDaysRemaining(
     plan.activePeriod.startDate,
@@ -410,20 +595,24 @@ function createSavingsGoal(
 function updatePlan(
   plan: BudgetPlan,
   timestamp: Timestamp,
-  updates: Partial<Pick<BudgetPlan, "balanceSnapshots" | "financialEvents">>,
+  updates: Partial<
+    Pick<BudgetPlan, "balanceSnapshots" | "financialEvents" | "plannedRecords">
+  >,
 ): BudgetPlan {
+  const plannedRecords = updates.plannedRecords ?? plan.plannedRecords;
+
   return {
     ...plan,
     updatedAt: timestamp,
     activePeriod: { ...plan.activePeriod },
     currency: { ...plan.currency },
     plannedRecords: {
-      categories: [...plan.plannedRecords.categories],
-      incomeTemplates: [...plan.plannedRecords.incomeTemplates],
-      commitmentTemplates: [...plan.plannedRecords.commitmentTemplates],
-      savingsGoals: [...plan.plannedRecords.savingsGoals],
+      categories: [...plannedRecords.categories],
+      incomeTemplates: [...plannedRecords.incomeTemplates],
+      commitmentTemplates: [...plannedRecords.commitmentTemplates],
+      savingsGoals: [...plannedRecords.savingsGoals],
       flexibleCategoryGuidance: [
-        ...plan.plannedRecords.flexibleCategoryGuidance,
+        ...plannedRecords.flexibleCategoryGuidance,
       ],
     },
     balanceSnapshots: updates.balanceSnapshots ?? [...plan.balanceSnapshots],
@@ -441,6 +630,23 @@ function assertDateInsideActivePeriod(
       `Date ${date} must be inside the active period ${period.startDate} to ${period.endDate}.`,
     );
   }
+}
+
+function assertCategoryExists(plan: BudgetPlan, categoryId: EntityId): void {
+  if (
+    !plan.plannedRecords.categories.some(
+      (category) => category.id === categoryId && !category.archived,
+    )
+  ) {
+    throw new RangeError(`Category ${categoryId} was not found.`);
+  }
+}
+
+function inputIncludes<T extends object>(
+  input: T,
+  key: keyof T,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(input, key);
 }
 
 function appendFinancialEvent(

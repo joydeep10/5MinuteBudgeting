@@ -11,6 +11,7 @@ import type {
   FinancialEventRecord,
   FlexibleCategoryGuidance,
   Money,
+  SavingsGoal,
 } from "../src/domain";
 
 const money = (minorUnits: number): Money => minorUnits;
@@ -86,6 +87,22 @@ const event = (
   note: overrides.note,
 });
 
+const goal = (
+  overrides: Partial<SavingsGoal> & Pick<SavingsGoal, "id">,
+): SavingsGoal => ({
+  id: overrides.id,
+  createdAt: overrides.createdAt ?? "2026-06-01T08:00:00.000Z",
+  updatedAt: overrides.updatedAt ?? "2026-06-01T08:00:00.000Z",
+  name: overrides.name ?? overrides.id,
+  targetAmount: overrides.targetAmount ?? money(0),
+  currentAmount: overrides.currentAmount ?? money(0),
+  targetDate: overrides.targetDate,
+  status: overrides.status ?? "active",
+  protected: overrides.protected ?? true,
+  priority: overrides.priority,
+  periodContributionOverride: overrides.periodContributionOverride,
+});
+
 const plan = (
   overrides: {
     fixedBuffer?: Money;
@@ -94,6 +111,7 @@ const plan = (
     categories?: readonly Category[];
     flexibleCategoryGuidance?: readonly FlexibleCategoryGuidance[];
     commitmentTemplates?: readonly CommitmentTemplate[];
+    savingsGoals?: readonly SavingsGoal[];
   } = {},
 ): BudgetPlan => ({
   schemaVersion: budgetPlanSchemaVersion,
@@ -115,7 +133,7 @@ const plan = (
     categories: overrides.categories ?? [],
     incomeTemplates: [],
     commitmentTemplates: overrides.commitmentTemplates ?? [],
-    savingsGoals: [],
+    savingsGoals: overrides.savingsGoals ?? [],
     flexibleCategoryGuidance: overrides.flexibleCategoryGuidance ?? [],
   },
   balanceSnapshots: overrides.balanceSnapshots ?? [],
@@ -238,5 +256,82 @@ describe("dashboard home", () => {
     expect(spendingHtml).toContain(
       "Spending and payments are already reflected in available money.",
     );
+  });
+
+  it("shows savings and category guidance workflows without treating category guidance as protected money", () => {
+    const food = category({
+      id: "category_food",
+      name: "Food",
+    });
+    const custom = category({
+      id: "category_pet_care",
+      name: "Pet care",
+      kind: "custom",
+    });
+
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_opening",
+              amount: money(100_000),
+            }),
+          ],
+          savingsGoals: [
+            goal({
+              id: "goal_emergency",
+              name: "Emergency fund",
+              targetAmount: money(60_000),
+              currentAmount: money(10_000),
+              periodContributionOverride: money(30_000),
+            }),
+          ],
+          categories: [food, custom],
+          flexibleCategoryGuidance: [
+            guidance({
+              id: "guidance_food",
+              categoryId: food.id,
+              periodLimit: money(20_000),
+            }),
+            guidance({
+              id: "guidance_pet_care",
+              categoryId: custom.id,
+              periodLimit: money(12_000),
+            }),
+          ],
+          financialEvents: [
+            event({
+              id: "emergency_contribution",
+              date: "2026-06-10",
+              kind: "savings-contribution",
+              amount: money(10_000),
+              savingsGoalId: "goal_emergency",
+            }),
+          ],
+        })}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain("Savings goals");
+    expect(html).toContain("set this money aside before calculating what I can spend");
+    expect(html).toContain("Emergency fund");
+    expect(html).toContain("Protected");
+    expect(html).toContain("Record contribution");
+    expect(html).toContain("Save goal changes");
+    expect(html).toContain("Pause goal");
+    expect(html).toContain("Complete goal");
+    expect(html).toContain("Archive goal");
+    expect(html).toContain("Protected savings");
+    expect(html).toContain("$200.00");
+    expect(html).toContain("Category guidance");
+    expect(html).toContain("Optional visual guidance");
+    expect(html).toContain("does not reduce safe-to-spend");
+    expect(html).toContain("Food");
+    expect(html).toContain("Pet care");
+    expect(html).toContain("Add custom category");
+    expect(html).toContain("Set guidance");
   });
 });
