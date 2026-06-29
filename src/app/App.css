@@ -299,7 +299,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   background: #ffffff;
   border: 1px solid rgb(8 47 73 / 18%);
   border-radius: 8px;
@@ -311,9 +312,15 @@ select {
 
 input:focus-visible,
 select:focus-visible,
+textarea:focus-visible,
 button:focus-visible {
   outline: 3px solid #00bfff;
   outline-offset: 3px;
+}
+
+textarea {
+  padding: 12px;
+  resize: vertical;
 }
 
 .choice-grid,
@@ -801,7 +808,8 @@ button:focus-visible {
 
 .reminder-summary,
 .notification-status,
-.in-app-reminders {
+.in-app-reminders,
+.backup-prompt {
   background: #f8fafc;
   border: 1px solid rgb(8 47 73 / 10%);
   border-radius: 8px;
@@ -832,6 +840,16 @@ button:focus-visible {
 .notification-status {
   display: grid;
   gap: 12px;
+}
+
+.export-action-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.snapshot-note {
+  color: #31576b;
+  margin: 0;
 }
 
 .notification-status h3,

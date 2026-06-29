@@ -1,5 +1,5 @@
 import { budgetPlanSchemaVersion } from "../domain";
-import type { BudgetPlan, Timestamp } from "../domain";
+import type { BudgetPlan, ExportSnapshot, Money, Timestamp } from "../domain";
 
 export const activeBudgetPlanStorageKey = "active-budget-plan" as const;
 const budgetPlanDatabaseName = "5-minute-budgeting" as const;
@@ -59,6 +59,17 @@ export interface ExportBudgetPlanBackupInput {
 export interface ReplaceActivePlanFromBackupInput {
   repository: BudgetPlanRepository;
   backupJson: string;
+}
+
+export interface BudgetSnapshotFileExport {
+  fileName: string;
+  mimeType: string;
+  contents: string;
+}
+
+export interface CreateBudgetSnapshotFileExportInput {
+  snapshot: ExportSnapshot;
+  generatedAt: Timestamp;
 }
 
 export function createBudgetPlanRepository({
@@ -150,8 +161,238 @@ export async function replaceActivePlanFromBackup({
   return importedPlan;
 }
 
+export function createBudgetSnapshotPdfExport({
+  snapshot,
+  generatedAt,
+}: CreateBudgetSnapshotFileExportInput): BudgetSnapshotFileExport {
+  const lines = [
+    "5-Minute Budgeting",
+    "Budget snapshot",
+    `Generated ${generatedAt}`,
+    `Period ${snapshot.activePeriod.startDate} to ${snapshot.activePeriod.endDate}`,
+    `Safe to spend today ${formatExportMoney(
+      snapshot.metrics.confirmed.safeToday,
+      snapshot,
+    )}`,
+    `Safe this week ${formatExportMoney(
+      snapshot.metrics.confirmed.safeThisWeek,
+      snapshot,
+    )}`,
+    `Safe this period ${formatExportMoney(
+      snapshot.metrics.confirmed.safeThisPeriod,
+      snapshot,
+    )}`,
+    `Health ${snapshot.metrics.health}`,
+    `Available money ${formatExportMoney(
+      snapshot.summary.effectiveAvailableMoney,
+      snapshot,
+    )}`,
+    `Upcoming commitments ${formatExportMoney(
+      snapshot.summary.unpaidCommitments,
+      snapshot,
+    )}`,
+    `Protected savings ${formatExportMoney(
+      snapshot.summary.protectedSavings,
+      snapshot,
+    )}`,
+    `Safety buffer ${formatExportMoney(snapshot.summary.fixedBuffer, snapshot)}`,
+    "Category breakdown",
+    ...snapshot.report.spendingSummaries.map(
+      (summary) =>
+        `${summary.categoryName} spent ${formatExportMoney(
+          summary.spentAmount,
+          snapshot,
+        )}`,
+    ),
+    "Commitments",
+    ...snapshot.report.commitments.map(
+      (commitment) =>
+        `${commitment.name} due ${commitment.date} remaining ${formatExportMoney(
+          commitment.remainingUnpaidAmount,
+          snapshot,
+        )}`,
+    ),
+    "Exports are snapshots. Budget data remains local to this browser.",
+  ];
+
+  return {
+    fileName: snapshotFileName(snapshot, "pdf"),
+    mimeType: "application/pdf",
+    contents: renderSimplePdf(lines),
+  };
+}
+
+export function createBudgetSnapshotWorkbookExport({
+  snapshot,
+  generatedAt,
+}: CreateBudgetSnapshotFileExportInput): BudgetSnapshotFileExport {
+  const summaryRows = [
+    ["Generated at", generatedAt],
+    ["As of date", snapshot.asOfDate],
+    ["Period start", snapshot.activePeriod.startDate],
+    ["Period end", snapshot.activePeriod.endDate],
+    ["Safe to spend today", formatExportMoney(snapshot.metrics.confirmed.safeToday, snapshot)],
+    ["Safe this week", formatExportMoney(snapshot.metrics.confirmed.safeThisWeek, snapshot)],
+    ["Safe this period", formatExportMoney(snapshot.metrics.confirmed.safeThisPeriod, snapshot)],
+    ["Health", snapshot.metrics.health],
+    ["Available money", formatExportMoney(snapshot.summary.effectiveAvailableMoney, snapshot)],
+    ["Upcoming commitments", formatExportMoney(snapshot.summary.unpaidCommitments, snapshot)],
+    ["Protected savings", formatExportMoney(snapshot.summary.protectedSavings, snapshot)],
+    ["Safety buffer", formatExportMoney(snapshot.summary.fixedBuffer, snapshot)],
+    ["Snapshot note", "Exports are snapshots. Budget data remains local to this browser."],
+  ];
+  const ledgerRows = snapshot.report.ledgerRows.map((row) => [
+    row.date,
+    row.rowType,
+    row.label,
+    formatExportMoney(row.amount, snapshot),
+    row.categoryId ?? "",
+    row.relatedRecordId ?? "",
+  ]);
+  const commitmentRows = snapshot.report.commitments.map((commitment) => [
+    commitment.date,
+    commitment.name,
+    commitment.kind,
+    formatExportMoney(commitment.amount, snapshot),
+    formatExportMoney(commitment.remainingUnpaidAmount, snapshot),
+    commitment.paid ? "Paid" : "Unpaid",
+  ]);
+  const categoryRows = snapshot.report.spendingSummaries.map((summary) => [
+    summary.categoryName,
+    summary.categoryKind,
+    formatExportMoney(summary.spentAmount, snapshot),
+    summary.periodLimit === undefined
+      ? ""
+      : formatExportMoney(summary.periodLimit, snapshot),
+    formatExportMoney(summary.overageAmount, snapshot),
+  ]);
+
+  return {
+    fileName: snapshotFileName(snapshot, "xls"),
+    mimeType: "application/vnd.ms-excel",
+    contents: renderWorkbookXml([
+      {
+        name: "Summary",
+        rows: summaryRows,
+      },
+      {
+        name: "Ledger",
+        rows: [["Date", "Type", "Label", "Amount", "Category", "Related record"], ...ledgerRows],
+      },
+      {
+        name: "Commitments",
+        rows: [["Date", "Name", "Kind", "Amount", "Remaining", "Status"], ...commitmentRows],
+      },
+      {
+        name: "Categories",
+        rows: [["Category", "Kind", "Spent", "Guidance", "Overage"], ...categoryRows],
+      },
+    ]),
+  };
+}
+
 function cloneBudgetPlan(plan: BudgetPlan): BudgetPlan {
   return JSON.parse(JSON.stringify(plan)) as BudgetPlan;
+}
+
+function snapshotFileName(snapshot: ExportSnapshot, extension: "pdf" | "xls"): string {
+  return `5-minute-budgeting-snapshot-${snapshot.asOfDate}.${extension}`;
+}
+
+function formatExportMoney(amount: Money, snapshot: ExportSnapshot): string {
+  const sign = amount < 0 ? "-" : "";
+  const absoluteAmount = Math.abs(amount);
+  const scale = 10 ** snapshot.currency.decimalPlaces;
+  const whole = Math.floor(absoluteAmount / scale);
+  const fraction = String(absoluteAmount % scale).padStart(
+    snapshot.currency.decimalPlaces,
+    "0",
+  );
+  const prefix = snapshot.currency.symbol ?? `${snapshot.currency.code} `;
+
+  return `${sign}${prefix}${whole}.${fraction}`;
+}
+
+function renderSimplePdf(lines: readonly string[]): string {
+  const textCommands = lines
+    .slice(0, 32)
+    .map(
+      (line, index) =>
+        `BT /F1 ${index < 2 ? 18 : 11} Tf 56 ${760 - index * 22} Td (${escapePdfText(
+          line,
+        )}) Tj ET`,
+    )
+    .join("\n");
+  const stream = `${textCommands}\n`;
+  const objects = [
+    "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+    "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+    "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n",
+    "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
+    `5 0 obj << /Length ${stream.length} >> stream\n${stream}endstream endobj\n`,
+  ];
+  let contents = "%PDF-1.4\n";
+  const offsets = [0];
+
+  for (const object of objects) {
+    offsets.push(contents.length);
+    contents += object;
+  }
+
+  const xrefStart = contents.length;
+  const xrefRows = offsets
+    .map((offset, index) =>
+      index === 0
+        ? "0000000000 65535 f "
+        : `${String(offset).padStart(10, "0")} 00000 n `,
+    )
+    .join("\n");
+
+  return `${contents}xref
+0 ${objects.length + 1}
+${xrefRows}
+trailer << /Size ${objects.length + 1} /Root 1 0 R >>
+startxref
+${xrefStart}
+%%EOF`;
+}
+
+function escapePdfText(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+function renderWorkbookXml(
+  sheets: readonly { name: string; rows: readonly (readonly string[])[] }[],
+): string {
+  return [
+    '<?xml version="1.0"?>',
+    '<?mso-application progid="Excel.Sheet"?>',
+    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">',
+    ...sheets.map(
+      (sheet) =>
+        `<Worksheet ss:Name="${escapeXml(sheet.name)}"><Table>${sheet.rows
+          .map(
+            (row) =>
+              `<Row>${row
+                .map(
+                  (cell) =>
+                    `<Cell><Data ss:Type="String">${escapeXml(cell)}</Data></Cell>`,
+                )
+                .join("")}</Row>`,
+          )
+          .join("")}</Table></Worksheet>`,
+    ),
+    "</Workbook>",
+  ].join("");
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 function normalizeNotificationPermission(
