@@ -28,6 +28,7 @@ import {
   calculateSafeToSpend,
   calculateSavingsGoalAllocations,
   calculateSpendingLoggedThisPeriod,
+  buildExportSnapshot,
   generateCommitmentOccurrences,
 } from "../domain";
 import type {
@@ -41,6 +42,7 @@ import type {
   CommitmentTemplate,
   CurrencyMetadata,
   DateOnly,
+  ExportSnapshot,
   FinancialEventRecord,
   Money,
   PeriodSnapshot,
@@ -60,10 +62,17 @@ import type {
   CommitmentShortcut,
   SetupWizardSubmission,
 } from "../features/setupWizard";
-import { createBrowserNotificationAdapter } from "../infrastructure";
+import {
+  createBrowserNotificationAdapter,
+  createBudgetSnapshotPdfExport,
+  createBudgetSnapshotWorkbookExport,
+  exportBudgetPlanBackup,
+  importBudgetPlanBackup,
+} from "../infrastructure";
 import type {
   BrowserNotificationAdapter,
   BudgetPlanRepository,
+  BudgetSnapshotFileExport,
   NotificationPermissionStatus,
 } from "../infrastructure";
 
@@ -735,6 +744,14 @@ function Dashboard({
   });
   const savingsGoalAllocations = calculateSavingsGoalAllocations(plan);
   const categorySummaries = calculateCategorySummaries(plan);
+  const exportSnapshot = buildExportSnapshot({
+    plan,
+    today,
+    calculation: result,
+    commitmentOccurrences: commitments,
+    categorySummaries,
+    savingsGoalAllocations,
+  });
   const shouldInviteRefinement = budgetCouldUseRefinement(plan);
   const warnings = rankedBudgetWarnings(result.warnings);
   const topWarning = warnings[0];
@@ -888,6 +905,16 @@ function Dashboard({
           Spending and payments are already reflected in available money.
         </p>
       </section>
+
+      <DataSafetyPanel
+        plan={plan}
+        repository={repository}
+        services={services}
+        snapshot={exportSnapshot}
+        onPlanImported={(importedPlan) =>
+          void savePlan(importedPlan, "Imported backup replaced this browser budget.")
+        }
+      />
 
       <DailyActionPanel
         onPlanChange={onPlanChange}
@@ -1065,6 +1092,212 @@ function Dashboard({
       )}
     </main>
   );
+}
+
+interface DataSafetyPanelProps {
+  plan: BudgetPlan;
+  repository?: BudgetPlanRepository;
+  services: ApplicationServices;
+  snapshot: ExportSnapshot;
+  onPlanImported: (plan: BudgetPlan) => void;
+}
+
+function DataSafetyPanel({
+  plan,
+  repository,
+  services,
+  snapshot,
+  onPlanImported,
+}: DataSafetyPanelProps) {
+  const [backupPromptVisible, setBackupPromptVisible] = useState(() =>
+    backupPromptShouldShow(plan.id),
+  );
+  const [message, setMessage] = useState<string | undefined>();
+
+  function downloadBackup() {
+    downloadFile({
+      fileName: `5-minute-budgeting-backup-${snapshot.asOfDate}.json`,
+      mimeType: "application/json",
+      contents: exportBudgetPlanBackup({
+        plan,
+        exportedAt: services.now(),
+      }),
+    });
+    setMessage("JSON backup exported.");
+  }
+
+  function downloadPdfSnapshot() {
+    downloadFile(
+      createBudgetSnapshotPdfExport({
+        snapshot,
+        generatedAt: services.now(),
+      }),
+    );
+    setMessage("PDF snapshot generated.");
+  }
+
+  function downloadWorkbookSnapshot() {
+    downloadFile(
+      createBudgetSnapshotWorkbookExport({
+        snapshot,
+        generatedAt: services.now(),
+      }),
+    );
+    setMessage("Excel workbook generated.");
+  }
+
+  async function submitImport(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const formData = new FormData(event.currentTarget);
+    const confirmed = formData.get("confirm-replacement") === "on";
+    const backupJson = await backupJsonFromForm(formData);
+
+    if (!confirmed) {
+      setMessage("Confirm replacement before importing a backup.");
+      return;
+    }
+
+    try {
+      const importedPlan = importBudgetPlanBackup(backupJson);
+
+      await repository?.saveActivePlan(importedPlan);
+      onPlanImported(importedPlan);
+      setMessage("Backup imported. This browser budget was replaced.");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Backup could not be imported.",
+      );
+    }
+  }
+
+  return (
+    <section className="workflow-panel data-safety-panel" aria-labelledby="data-safety-title">
+      <div className="workflow-heading">
+        <p className="section-kicker">Saved on this device</p>
+        <h2 id="data-safety-title">Back up this budget</h2>
+        <p>
+          Budget data stays local to this browser. Clearing browser data can remove it.
+        </p>
+      </div>
+
+      {backupPromptVisible ? (
+        <div className="backup-prompt" role="status">
+          <strong>Make a backup after setup.</strong>
+          <p>
+            Export a JSON backup when you want a restorable copy outside this browser.
+          </p>
+          <button
+            className="text-button"
+            type="button"
+            onClick={() => {
+              dismissBackupPrompt(plan.id);
+              setBackupPromptVisible(false);
+            }}
+          >
+            Dismiss backup reminder
+          </button>
+        </div>
+      ) : null}
+
+      {message === undefined ? null : (
+        <div className="backup-prompt" role="status">
+          <strong>{message}</strong>
+        </div>
+      )}
+
+      <div className="backup-prompt">
+        <strong>Saved on this device</strong>
+        <p>
+          Major changes may make a fresh JSON backup useful, but reminders never block your budget.
+        </p>
+      </div>
+
+      <div className="export-action-grid" aria-label="Backup and snapshot exports">
+        <button className="button button-secondary" type="button" onClick={downloadBackup}>
+          Export JSON backup
+        </button>
+        <button className="button button-secondary" type="button" onClick={downloadPdfSnapshot}>
+          PDF snapshot
+        </button>
+        <button className="button button-secondary" type="button" onClick={downloadWorkbookSnapshot}>
+          Excel workbook
+        </button>
+      </div>
+
+      <form className="workflow-form" aria-label="Import JSON backup" onSubmit={submitImport}>
+        <label>
+          Import JSON backup
+          <input accept="application/json,.json" name="backup-file" type="file" />
+        </label>
+        <label>
+          Or paste backup JSON
+          <textarea name="backup-json" rows={6} />
+        </label>
+        <label className="inline-choice">
+          <input name="confirm-replacement" type="checkbox" />
+          Review and replace this browser budget
+        </label>
+        <button className="button button-primary" type="submit">
+          Import backup
+        </button>
+      </form>
+
+      <p className="snapshot-note">
+        Exports are snapshots. Budget data remains local to this browser unless you choose to save or share a downloaded file.
+      </p>
+      <p className="snapshot-note">
+        Power BI-ready workbook export is not included in V1.
+      </p>
+    </section>
+  );
+}
+
+function backupPromptShouldShow(planId: string): boolean {
+  return localStorageItem(`backup-prompt-dismissed:${planId}`) !== "true";
+}
+
+function dismissBackupPrompt(planId: string): void {
+  try {
+    globalThis.localStorage?.setItem(`backup-prompt-dismissed:${planId}`, "true");
+  } catch {
+    return;
+  }
+}
+
+function localStorageItem(key: string): string | null {
+  try {
+    return globalThis.localStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function backupJsonFromForm(formData: FormData): Promise<string> {
+  const pastedBackup = formString(formData, "backup-json").trim();
+
+  if (pastedBackup !== "") {
+    return pastedBackup;
+  }
+
+  const file = formData.get("backup-file");
+
+  if (file instanceof File && file.size > 0) {
+    return file.text();
+  }
+
+  throw new Error("Choose or paste a JSON backup before importing.");
+}
+
+function downloadFile(file: BudgetSnapshotFileExport): void {
+  const blob = new Blob([file.contents], { type: file.mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+
+  anchor.href = url;
+  anchor.download = file.fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 interface SimulatorProps {

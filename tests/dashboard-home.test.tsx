@@ -145,6 +145,36 @@ const plan = (
 });
 
 describe("dashboard home", () => {
+  it("shows local-save reassurance, backup/import choices, and snapshot export messaging", () => {
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_data_safety",
+              amount: money(80_000),
+            }),
+          ],
+        })}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain("Saved on this device");
+    expect(html).toContain(
+      "Budget data stays local to this browser. Clearing browser data can remove it.",
+    );
+    expect(html).toContain("Back up this budget");
+    expect(html).toContain("Export JSON backup");
+    expect(html).toContain("Import JSON backup");
+    expect(html).toContain("Review and replace this browser budget");
+    expect(html).toContain("PDF snapshot");
+    expect(html).toContain("Excel workbook");
+    expect(html).toContain("Exports are snapshots");
+    expect(html).toContain("Power BI-ready workbook export is not included in V1.");
+  });
+
   it("lets users configure in-app reminders while browser notifications fall back when unsupported", () => {
     const html = renderToStaticMarkup(
       <App

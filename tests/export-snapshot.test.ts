@@ -8,6 +8,10 @@ import {
   calculateSavingsGoalAllocations,
   generateCommitmentOccurrences,
 } from "../src/domain";
+import {
+  createBudgetSnapshotPdfExport,
+  createBudgetSnapshotWorkbookExport,
+} from "../src/infrastructure";
 import type {
   BalanceSnapshot,
   BudgetPlan,
@@ -384,5 +388,70 @@ describe("export snapshot builder", () => {
         shortfallAmount: 0,
       },
     ]);
+  });
+
+  it("generates PDF and editable workbook files from the supplied export snapshot", () => {
+    const dining = category({
+      id: "category_dining",
+      name: "Dining out",
+    });
+    const budgetPlan = plan({
+      categories: [dining],
+      flexibleCategoryGuidance: [
+        guidance({
+          id: "guidance_dining",
+          categoryId: dining.id,
+          periodLimit: money(10_000),
+        }),
+      ],
+      balanceSnapshots: [
+        snapshot({
+          id: "snapshot_opening",
+          amount: money(100_000),
+        }),
+      ],
+      financialEvents: [
+        event({
+          id: "spend_dining",
+          amount: money(12_000),
+          categoryId: dining.id,
+          note: "Dinner",
+        }),
+      ],
+    });
+    const calculation = calculateSafeToSpend({
+      plan: budgetPlan,
+      today: "2026-06-10",
+    });
+    const snapshotResult = buildExportSnapshot({
+      plan: budgetPlan,
+      today: "2026-06-10",
+      calculation,
+      commitmentOccurrences: [],
+      categorySummaries: calculateCategorySummaries(budgetPlan),
+      savingsGoalAllocations: [],
+    });
+
+    const pdf = createBudgetSnapshotPdfExport({
+      snapshot: snapshotResult,
+      generatedAt: "2026-06-10T08:00:00.000Z",
+    });
+    const workbook = createBudgetSnapshotWorkbookExport({
+      snapshot: snapshotResult,
+      generatedAt: "2026-06-10T08:00:00.000Z",
+    });
+
+    expect(pdf.fileName).toBe("5-minute-budgeting-snapshot-2026-06-10.pdf");
+    expect(pdf.mimeType).toBe("application/pdf");
+    expect(pdf.contents).toContain("Safe to spend today");
+    expect(pdf.contents).toContain("USD 45.23");
+    expect(pdf.contents).toContain("Dining out");
+    expect(workbook.fileName).toBe("5-minute-budgeting-snapshot-2026-06-10.xls");
+    expect(workbook.mimeType).toBe("application/vnd.ms-excel");
+    expect(workbook.contents).toContain("<Workbook");
+    expect(workbook.contents).toContain("Summary");
+    expect(workbook.contents).toContain("Ledger");
+    expect(workbook.contents).toContain("USD 45.23");
+    expect(workbook.contents).toContain("Dinner");
   });
 });
