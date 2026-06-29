@@ -23,6 +23,17 @@ export interface BudgetPlanRepository {
   loadActivePlan: () => Promise<BudgetPlan | undefined>;
 }
 
+export type NotificationPermissionStatus =
+  | "granted"
+  | "denied"
+  | "default"
+  | "unsupported";
+
+export interface BrowserNotificationAdapter {
+  permissionStatus: () => NotificationPermissionStatus;
+  requestPermission: () => Promise<NotificationPermissionStatus>;
+}
+
 export interface BudgetPlanBackupEnvelope {
   schemaVersion: number;
   exportedAt: Timestamp;
@@ -88,6 +99,27 @@ export function createIndexedDbBudgetPlanRepository({
   });
 }
 
+export function createBrowserNotificationAdapter(): BrowserNotificationAdapter {
+  return {
+    permissionStatus() {
+      if (!("Notification" in globalThis)) {
+        return "unsupported";
+      }
+
+      return normalizeNotificationPermission(globalThis.Notification.permission);
+    },
+    async requestPermission() {
+      if (!("Notification" in globalThis)) {
+        return "unsupported";
+      }
+
+      return normalizeNotificationPermission(
+        await globalThis.Notification.requestPermission(),
+      );
+    },
+  };
+}
+
 export function exportBudgetPlanBackup({
   plan,
   exportedAt,
@@ -120,6 +152,20 @@ export async function replaceActivePlanFromBackup({
 
 function cloneBudgetPlan(plan: BudgetPlan): BudgetPlan {
   return JSON.parse(JSON.stringify(plan)) as BudgetPlan;
+}
+
+function normalizeNotificationPermission(
+  permission: NotificationPermission,
+): NotificationPermissionStatus {
+  if (
+    permission === "granted" ||
+    permission === "denied" ||
+    permission === "default"
+  ) {
+    return permission;
+  }
+
+  return "unsupported";
 }
 
 class IndexedDbBudgetPlanEnvelopeStore implements BudgetPlanEnvelopeStore {
@@ -260,7 +306,9 @@ function isBudgetPlan(value: unknown): value is BudgetPlan {
     isPlannedRecords(value.plannedRecords) &&
     Array.isArray(value.balanceSnapshots) &&
     Array.isArray(value.financialEvents) &&
-    (value.periodSnapshots === undefined || Array.isArray(value.periodSnapshots))
+    (value.periodSnapshots === undefined || Array.isArray(value.periodSnapshots)) &&
+    (value.reminderPreferences === undefined ||
+      isReminderPreferences(value.reminderPreferences))
   );
 }
 
@@ -297,6 +345,16 @@ function isPlannedRecords(value: unknown): boolean {
     Array.isArray(value.commitmentTemplates) &&
     Array.isArray(value.savingsGoals) &&
     Array.isArray(value.flexibleCategoryGuidance)
+  );
+}
+
+function isReminderPreferences(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.dailyCheckInEnabled === "boolean" &&
+    typeof value.dailyCheckInTime === "string" &&
+    typeof value.dueItemRemindersEnabled === "boolean" &&
+    typeof value.browserNotificationsEnabled === "boolean"
   );
 }
 

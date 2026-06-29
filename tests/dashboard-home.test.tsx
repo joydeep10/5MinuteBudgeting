@@ -145,6 +145,233 @@ const plan = (
 });
 
 describe("dashboard home", () => {
+  it("lets users configure in-app reminders while browser notifications fall back when unsupported", () => {
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_reminders",
+              amount: money(80_000),
+            }),
+          ],
+        })}
+        notificationAdapter={{
+          permissionStatus: () => "unsupported",
+          requestPermission: async () => "unsupported",
+        }}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain("Reminders");
+    expect(html).toContain("Daily check-in");
+    expect(html).toContain("Due-item reminders");
+    expect(html).toContain("Save reminder settings");
+    expect(html).toContain("Browser notifications are not supported here.");
+    expect(html).toContain("In-app reminders still work while this budget is open.");
+    expect(html).not.toContain("closed-app mobile push");
+    expect(html).not.toContain("PWA");
+  });
+
+  it("shows saved reminder choices instead of forcing every reminder on", () => {
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={{
+          ...plan({
+            balanceSnapshots: [
+              snapshot({
+                id: "snapshot_saved_reminders",
+                amount: money(80_000),
+              }),
+            ],
+          }),
+          reminderPreferences: {
+            dailyCheckInEnabled: false,
+            dailyCheckInTime: "07:30",
+            dueItemRemindersEnabled: false,
+            browserNotificationsEnabled: false,
+          },
+        }}
+        notificationAdapter={{
+          permissionStatus: () => "default",
+          requestPermission: async () => "granted",
+        }}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain("Daily check-in off");
+    expect(html).toContain("Due-item reminders off");
+    expect(html).toContain("07:30");
+    expect(html).toContain("Enable browser notifications");
+  });
+
+  it("shows in-app due-item reminders for overdue and due-today commitments", () => {
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_due_reminders",
+              amount: money(100_000),
+            }),
+          ],
+          commitmentTemplates: [
+            commitment({
+              id: "bill_rent",
+              name: "Rent",
+              amount: money(30_000),
+              startsOn: "2026-06-09",
+            }),
+            commitment({
+              id: "debt_card",
+              name: "Card payment",
+              kind: "debt",
+              amount: money(25_000),
+              startsOn: "2026-06-10",
+            }),
+            commitment({
+              id: "bill_internet",
+              name: "Internet",
+              amount: money(8_000),
+              startsOn: "2026-06-20",
+            }),
+          ],
+        })}
+        notificationAdapter={{
+          permissionStatus: () => "denied",
+          requestPermission: async () => "denied",
+        }}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain("In-app reminders");
+    expect(html).toContain("Reminder: Rent is overdue");
+    expect(html).toContain("Reminder: Card payment is due today");
+    expect(html).not.toContain("Reminder: Internet");
+    expect(html).toContain("Browser notifications are blocked.");
+  });
+
+  it("only offers browser notification permission from the dashboard reminder context", () => {
+    const notificationAdapter = {
+      permissionStatus: () => "default" as const,
+      requestPermission: async () => "granted" as const,
+    };
+    const landingHtml = renderToStaticMarkup(
+      <App notificationAdapter={notificationAdapter} />,
+    );
+    const setupHtml = renderToStaticMarkup(
+      <App initialView="setup" notificationAdapter={notificationAdapter} />,
+    );
+    const dashboardHtml = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_notification_context",
+              amount: money(80_000),
+            }),
+          ],
+        })}
+        notificationAdapter={notificationAdapter}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(landingHtml).not.toContain("Enable browser notifications");
+    expect(setupHtml).not.toContain("Enable browser notifications");
+    expect(dashboardHtml).toContain("Enable browser notifications");
+  });
+
+  it("shows granted browser notifications as enabled without another permission prompt", () => {
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_granted_notifications",
+              amount: money(80_000),
+            }),
+          ],
+        })}
+        notificationAdapter={{
+          permissionStatus: () => "granted",
+          requestPermission: async () => "granted",
+        }}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain("Browser notifications are enabled for supported reminders.");
+    expect(html).not.toContain("Enable browser notifications");
+  });
+
+  it("uses text cues and situation-impact-action copy for warning severity treatments", () => {
+    const dining = category({
+      id: "category_dining_warning_copy",
+      name: "Dining out",
+    });
+
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_warning_copy",
+              amount: money(100_000),
+            }),
+          ],
+          commitmentTemplates: [
+            commitment({
+              id: "bill_power_warning_copy",
+              name: "Power bill",
+              amount: money(15_000),
+              startsOn: "2026-06-09",
+            }),
+            commitment({
+              id: "debt_card_warning_copy",
+              name: "Card payment",
+              kind: "debt",
+              amount: money(25_000),
+              startsOn: "2026-06-10",
+            }),
+          ],
+          categories: [dining],
+          flexibleCategoryGuidance: [
+            guidance({
+              id: "guidance_dining_warning_copy",
+              categoryId: dining.id,
+              periodLimit: money(10_000),
+            }),
+          ],
+          financialEvents: [
+            event({
+              id: "spend_dining_warning_copy",
+              amount: money(15_000),
+              categoryId: dining.id,
+            }),
+          ],
+        })}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain("Critical");
+    expect(html).toContain("Warning");
+    expect(html).toContain("Guidance");
+    expect(html).toContain("Situation:");
+    expect(html).toContain("Impact:");
+    expect(html).toContain("Next action:");
+  });
+
   it("keeps rolled periods visible as dashboard history", () => {
     const html = renderToStaticMarkup(
       <App

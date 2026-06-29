@@ -26,6 +26,7 @@ import type {
   PeriodSnapshot,
   PlannedRecords,
   RecurrenceRule,
+  ReminderPreferences,
   SavingsGoal,
   SavingsGoalStatus,
   Timestamp,
@@ -197,6 +198,8 @@ export interface RollBudgetPlanPeriodForwardInput {
   confirmedAvailableMoney: Money;
   note?: string;
 }
+
+export interface SetReminderPreferencesInput extends ReminderPreferences {}
 
 export function createBudgetPlan(
   input: CreateBudgetPlanInput,
@@ -621,6 +624,16 @@ export function setFlexibleCategoryGuidance(
   });
 }
 
+export function setReminderPreferences(
+  plan: BudgetPlan,
+  input: SetReminderPreferencesInput,
+  services: ApplicationServices,
+): BudgetPlan {
+  return updatePlan(plan, services.now(), {
+    reminderPreferences: { ...input },
+  });
+}
+
 export function suggestNextActivePeriod(plan: BudgetPlan): ActiveBudgetPeriod {
   const periodLength = inclusiveDaysRemaining(
     plan.activePeriod.startDate,
@@ -734,7 +747,13 @@ function updatePlan(
   plan: BudgetPlan,
   timestamp: Timestamp,
   updates: Partial<
-    Pick<BudgetPlan, "balanceSnapshots" | "financialEvents" | "plannedRecords">
+    Pick<
+      BudgetPlan,
+      | "balanceSnapshots"
+      | "financialEvents"
+      | "plannedRecords"
+      | "reminderPreferences"
+    >
   >,
 ): BudgetPlan {
   const plannedRecords = updates.plannedRecords ?? plan.plannedRecords;
@@ -756,6 +775,11 @@ function updatePlan(
     balanceSnapshots: updates.balanceSnapshots ?? [...plan.balanceSnapshots],
     financialEvents: updates.financialEvents ?? [...plan.financialEvents],
     periodSnapshots: plan.periodSnapshots === undefined ? undefined : [...plan.periodSnapshots],
+    reminderPreferences:
+      updates.reminderPreferences ??
+      (plan.reminderPreferences === undefined
+        ? undefined
+        : { ...plan.reminderPreferences }),
   };
 }
 
