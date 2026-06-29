@@ -460,6 +460,14 @@ button:focus-visible {
   text-transform: uppercase;
 }
 
+.warning-severity {
+  color: #143b52;
+  font-size: 0.78rem;
+  font-weight: 900;
+  margin: 0;
+  text-transform: uppercase;
+}
+
 .warning-card h3,
 .warning-card p {
   margin: 0;
@@ -789,6 +797,52 @@ button:focus-visible {
 .workflow-panel {
   display: grid;
   gap: 20px;
+}
+
+.reminder-summary,
+.notification-status,
+.in-app-reminders {
+  background: #f8fafc;
+  border: 1px solid rgb(8 47 73 / 10%);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.reminder-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.reminder-summary p,
+.notification-status p,
+.in-app-reminders ul {
+  margin: 0;
+}
+
+.reminder-summary p {
+  background: #ffffff;
+  border: 1px solid rgb(8 47 73 / 8%);
+  border-radius: 999px;
+  color: #143b52;
+  font-weight: 900;
+  padding: 8px 12px;
+}
+
+.notification-status {
+  display: grid;
+  gap: 12px;
+}
+
+.notification-status h3,
+.in-app-reminders h3 {
+  font-size: 1.05rem;
+}
+
+.in-app-reminders ul {
+  display: grid;
+  gap: 8px;
+  padding-left: 20px;
 }
 
 .workflow-heading p:last-child,

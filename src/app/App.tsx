@@ -6,6 +6,7 @@ import {
   addSavingsGoal,
   markCommitmentPaid,
   recordSavingsContribution,
+  setReminderPreferences,
   setFlexibleCategoryGuidance,
   suggestNextActivePeriod,
   updateCommitmentTemplate,
@@ -38,6 +39,7 @@ import type {
   FinancialEventRecord,
   Money,
   PeriodSnapshot,
+  ReminderPreferences,
   RecurrenceFrequency,
   RecurrenceRule,
   SavingsGoalStatus,
@@ -53,7 +55,12 @@ import type {
   CommitmentShortcut,
   SetupWizardSubmission,
 } from "../features/setupWizard";
-import type { BudgetPlanRepository } from "../infrastructure";
+import { createBrowserNotificationAdapter } from "../infrastructure";
+import type {
+  BrowserNotificationAdapter,
+  BudgetPlanRepository,
+  NotificationPermissionStatus,
+} from "../infrastructure";
 
 export type AppView = "landing" | "setup" | "dashboard";
 
@@ -63,6 +70,7 @@ export interface AppProps {
   initialPlan?: BudgetPlan;
   initialSetupSubmission?: Partial<SetupWizardSubmission>;
   repository?: BudgetPlanRepository;
+  notificationAdapter?: BrowserNotificationAdapter;
   services?: ApplicationServices;
   today?: DateOnly;
 }
@@ -87,6 +95,7 @@ export function App({
   initialView = "landing",
   initialPlan,
   initialSetupSubmission,
+  notificationAdapter = createBrowserNotificationAdapter(),
   repository,
   services = createBrowserApplicationServices(),
   today = currentDateOnly(),
@@ -116,6 +125,7 @@ export function App({
     ) : (
       <Dashboard
         plan={plan}
+        notificationAdapter={notificationAdapter}
         repository={repository}
         services={services}
         today={today}
@@ -674,6 +684,7 @@ function confirmStartNewBudget(onStartBudgeting: () => void): void {
 
 interface DashboardProps {
   plan: BudgetPlan;
+  notificationAdapter: BrowserNotificationAdapter;
   repository?: BudgetPlanRepository;
   services: ApplicationServices;
   today: DateOnly;
@@ -682,6 +693,7 @@ interface DashboardProps {
 
 function Dashboard({
   plan,
+  notificationAdapter,
   repository,
   services,
   today,
@@ -851,6 +863,18 @@ function Dashboard({
         repository={repository}
         services={services}
         today={today}
+      />
+
+      <ReminderPanel
+        commitments={commitments}
+        notificationAdapter={notificationAdapter}
+        onPreferencesChange={(preferences) =>
+          void savePlan(
+            setReminderPreferences(plan, preferences, services),
+            "Reminder settings saved.",
+          )
+        }
+        preferences={plan.reminderPreferences}
       />
 
       <section className="commitments-panel" aria-labelledby="commitments-title">
@@ -2327,6 +2351,176 @@ function recurrenceRuleForDueDate(
   return rule;
 }
 
+interface ReminderPanelProps {
+  commitments: readonly CommitmentOccurrence[];
+  notificationAdapter: BrowserNotificationAdapter;
+  onPreferencesChange: (preferences: ReminderPreferences) => void;
+  preferences?: ReminderPreferences;
+}
+
+function ReminderPanel({
+  commitments,
+  notificationAdapter,
+  onPreferencesChange,
+  preferences,
+}: ReminderPanelProps) {
+  const reminderPreferences = preferences ?? defaultReminderPreferences();
+  const dueItemReminders = reminderPreferences.dueItemRemindersEnabled
+    ? commitments.filter(
+        (commitment) =>
+          !commitment.paid &&
+          (commitment.timing === "overdue" ||
+            commitment.timing === "due-today"),
+      )
+    : [];
+  const [permissionStatus, setPermissionStatus] =
+    useState<NotificationPermissionStatus>(
+      notificationAdapter.permissionStatus(),
+    );
+
+  async function requestBrowserNotifications() {
+    setPermissionStatus(await notificationAdapter.requestPermission());
+  }
+
+  function submitReminderSettings(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+
+    onPreferencesChange({
+      dailyCheckInEnabled: formData.get("daily-check-in") === "on",
+      dailyCheckInTime: stringField(formData, "daily-check-in-time") || "18:00",
+      dueItemRemindersEnabled: formData.get("due-item-reminders") === "on",
+      browserNotificationsEnabled: permissionStatus === "granted",
+    });
+  }
+
+  return (
+    <section className="workflow-panel reminders-panel" aria-labelledby="reminders-title">
+      <div className="workflow-heading">
+        <p className="section-kicker">Reminders</p>
+        <h2 id="reminders-title">Check-in reminders</h2>
+        <p>
+          In-app reminders stay available in this budget. Browser notifications are optional and depend on this browser.
+        </p>
+      </div>
+
+      <form
+        className="workflow-form"
+        aria-label="Reminder settings"
+        onSubmit={submitReminderSettings}
+      >
+        <label className="inline-choice">
+          <input
+            defaultChecked={reminderPreferences.dailyCheckInEnabled}
+            name="daily-check-in"
+            type="checkbox"
+          />
+          Daily check-in
+        </label>
+        <label>
+          Check-in time
+          <input
+            defaultValue={reminderPreferences.dailyCheckInTime}
+            name="daily-check-in-time"
+            type="time"
+          />
+        </label>
+        <label className="inline-choice">
+          <input
+            defaultChecked={reminderPreferences.dueItemRemindersEnabled}
+            name="due-item-reminders"
+            type="checkbox"
+          />
+          Due-item reminders
+        </label>
+        <label>
+          Due-item timing
+          <select name="due-item-timing" defaultValue="due-and-overdue">
+            <option value="due-and-overdue">Due today and overdue</option>
+            <option value="overdue">Overdue only</option>
+          </select>
+        </label>
+        <button className="button button-secondary" type="submit">
+          Save reminder settings
+        </button>
+      </form>
+
+      <div className="reminder-summary" aria-label="Saved reminder choices">
+        <p>
+          {reminderPreferences.dailyCheckInEnabled
+            ? "Daily check-in on"
+            : "Daily check-in off"}
+        </p>
+        <p>
+          {reminderPreferences.dueItemRemindersEnabled
+            ? "Due-item reminders on"
+            : "Due-item reminders off"}
+        </p>
+      </div>
+
+      {dueItemReminders.length === 0 ? null : (
+        <div className="in-app-reminders" aria-label="In-app reminders">
+          <h3>In-app reminders</h3>
+          <ul>
+            {dueItemReminders.map((commitment) => (
+              <li key={commitment.id}>{dueItemReminderCopy(commitment)}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="notification-status">
+        <h3>Browser notifications</h3>
+        <p>{notificationPermissionCopy(permissionStatus)}</p>
+        {permissionStatus === "default" ? (
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={() => void requestBrowserNotifications()}
+          >
+            Enable browser notifications
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function defaultReminderPreferences(): ReminderPreferences {
+  return {
+    dailyCheckInEnabled: true,
+    dailyCheckInTime: "18:00",
+    dueItemRemindersEnabled: true,
+    browserNotificationsEnabled: false,
+  };
+}
+
+function dueItemReminderCopy(commitment: CommitmentOccurrence): string {
+  if (commitment.timing === "overdue") {
+    return `Reminder: ${commitment.name} is overdue`;
+  }
+
+  return `Reminder: ${commitment.name} is due today`;
+}
+
+function notificationPermissionCopy(
+  permissionStatus: NotificationPermissionStatus,
+): string {
+  if (permissionStatus === "granted") {
+    return "Browser notifications are enabled for supported reminders.";
+  }
+
+  if (permissionStatus === "denied") {
+    return "Browser notifications are blocked. In-app reminders still work while this budget is open.";
+  }
+
+  if (permissionStatus === "default") {
+    return "You can enable browser notifications from this reminder setting after creating a budget.";
+  }
+
+  return "Browser notifications are not supported here. In-app reminders still work while this budget is open.";
+}
+
 function dayParts(date: DateOnly): { month: number; dayOfMonth: number } {
   const [, month = "1", day = "1"] = date.split("-");
 
@@ -2509,8 +2703,17 @@ function BudgetWarningCard({
       role={prominent ? "status" : undefined}
     >
       {prominent ? <p className="warning-label">Top priority</p> : null}
+      <p className="warning-severity">{warningSeverityLabel(warning)}</p>
       <h3>{copy.headline}</h3>
-      <p>{copy.action}</p>
+      <p>
+        <strong>Situation:</strong> {copy.situation}
+      </p>
+      <p>
+        <strong>Impact:</strong> {copy.impact}
+      </p>
+      <p>
+        <strong>Next action:</strong> {copy.nextAction}
+      </p>
       {copy.amount === undefined ? null : (
         <strong className="warning-amount">{copy.amount}</strong>
       )}
@@ -2521,7 +2724,13 @@ function BudgetWarningCard({
 function budgetWarningCopy(
   warning: BudgetWarning,
   currency: CurrencyMetadata,
-): { headline: string; action: string; amount?: string } {
+): {
+  headline: string;
+  situation: string;
+  impact: string;
+  nextAction: string;
+  amount?: string;
+} {
   const amount = warningAmount(warning);
   const formattedAmount =
     amount === undefined ? undefined : formatMoney(amount, currency);
@@ -2529,7 +2738,9 @@ function budgetWarningCopy(
   if (warning.code === "critical-shortfall") {
     return {
       headline: "Budget shortfall",
-      action:
+      situation: "Your protected money is larger than your available money.",
+      impact: "Your safe-to-spend number is at zero until the shortfall is fixed.",
+      nextAction:
         "Your plan is short before today's spending. Update your balance or reduce commitments before spending.",
       amount: formattedAmount,
     };
@@ -2538,7 +2749,9 @@ function budgetWarningCopy(
   if (warning.code === "overdue-commitment") {
     return {
       headline: "A commitment is overdue",
-      action: "Settle or update this overdue commitment before spending more.",
+      situation: "A bill or debt expected before today is still unpaid.",
+      impact: "This money remains protected and should be handled before new spending.",
+      nextAction: "Settle or update this overdue commitment before spending more.",
       amount: formattedAmount,
     };
   }
@@ -2546,7 +2759,9 @@ function budgetWarningCopy(
   if (warning.code === "commitment-due-today") {
     return {
       headline: "A commitment is due today",
-      action: "Pay it, mark it paid, or adjust the commitment if it changed.",
+      situation: "A bill or debt is due today.",
+      impact: "The amount is still counted as spoken for in your safe-to-spend number.",
+      nextAction: "Pay it, mark it paid, or adjust the commitment if it changed.",
       amount: formattedAmount,
     };
   }
@@ -2554,17 +2769,33 @@ function budgetWarningCopy(
   if (warning.code === "overdue-savings-goal") {
     return {
       headline: "A protected savings goal is overdue",
-      action: "Review this goal so protected savings stay realistic.",
+      situation: "A protected savings goal passed its target date unfinished.",
+      impact: "The remaining planned contribution can make today's spending number too tight.",
+      nextAction: "Review this goal so protected savings stay realistic.",
       amount: formattedAmount,
     };
   }
 
   return {
     headline: "Category spending is over guidance",
-    action:
+    situation: "Spending in this category is above the guidance you set.",
+    impact: "This is a visual nudge only; it does not reduce safe-to-spend by itself.",
+    nextAction:
       "Use this as guidance for the rest of the period; it does not reduce safe-to-spend by itself.",
     amount: formattedAmount,
   };
+}
+
+function warningSeverityLabel(warning: BudgetWarning): string {
+  if (warning.severity === "critical") {
+    return "Critical";
+  }
+
+  if (warning.severity === "warning") {
+    return "Warning";
+  }
+
+  return "Guidance";
 }
 
 function warningAmount(warning: BudgetWarning): Money | undefined {

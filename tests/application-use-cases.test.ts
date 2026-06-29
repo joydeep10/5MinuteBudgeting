@@ -12,6 +12,7 @@ import {
   recordBalanceSnapshot,
   recordSavingsContribution,
   setFlexibleCategoryGuidance,
+  setReminderPreferences,
   updateCommitmentTemplate,
   updateSavingsGoal,
 } from "../src/application";
@@ -554,5 +555,46 @@ describe("application BudgetPlan use cases", () => {
         today: "2026-06-01",
       }).confirmed.rawSafePool,
     ).toBe(100_000);
+  });
+
+  it("saves reminder preferences immutably on the BudgetPlan", () => {
+    const services = testServices();
+    const plan = createBudgetPlan(
+      {
+        mode: "general",
+        currency: {
+          code: "USD",
+          decimalPlaces: 2,
+        },
+        activePeriod: {
+          startDate: "2026-06-01",
+          endDate: "2026-06-30",
+        },
+        fixedBuffer: money(0),
+        startingAvailableMoney: money(100_000),
+      },
+      services,
+    );
+
+    const updated = setReminderPreferences(
+      plan,
+      {
+        dailyCheckInEnabled: false,
+        dailyCheckInTime: "07:30",
+        dueItemRemindersEnabled: true,
+        browserNotificationsEnabled: false,
+      },
+      services,
+    );
+
+    expect(plan.reminderPreferences).toBeUndefined();
+    expect(updated).not.toBe(plan);
+    expect(updated.updatedAt).toBe("2026-06-22T10:00:00.000Z");
+    expect(updated.reminderPreferences).toEqual({
+      dailyCheckInEnabled: false,
+      dailyCheckInTime: "07:30",
+      dueItemRemindersEnabled: true,
+      browserNotificationsEnabled: false,
+    });
   });
 });

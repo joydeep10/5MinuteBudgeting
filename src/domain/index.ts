@@ -202,6 +202,13 @@ export interface PeriodSnapshot extends PersistedRecord {
   finalHealthStatus: BudgetHealthStatus;
 }
 
+export interface ReminderPreferences {
+  dailyCheckInEnabled: boolean;
+  dailyCheckInTime: string;
+  dueItemRemindersEnabled: boolean;
+  browserNotificationsEnabled: boolean;
+}
+
 export interface BudgetPlan extends PersistedRecord {
   schemaVersion: BudgetPlanSchemaVersion;
   mode: BudgetMode;
@@ -212,6 +219,7 @@ export interface BudgetPlan extends PersistedRecord {
   balanceSnapshots: readonly BalanceSnapshot[];
   financialEvents: readonly FinancialEventRecord[];
   periodSnapshots?: readonly PeriodSnapshot[];
+  reminderPreferences?: ReminderPreferences;
 }
 
 export interface SavingsGoalAllocation {
