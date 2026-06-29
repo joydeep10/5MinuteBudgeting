@@ -76,7 +76,15 @@ import type {
   NotificationPermissionStatus,
 } from "../infrastructure";
 
-export type AppView = "landing" | "setup" | "dashboard" | "simulator";
+export type AppView =
+  | "landing"
+  | "setup"
+  | "dashboard"
+  | "bills"
+  | "goals"
+  | "simulator"
+  | "more";
+type BudgetWorkspaceView = Exclude<AppView, "landing" | "setup">;
 
 export interface AppProps {
   hasSavedBudget?: boolean;
@@ -133,16 +141,23 @@ export function App({
     );
   }
 
-  if (view === "dashboard") {
+  if (
+    view === "dashboard" ||
+    view === "bills" ||
+    view === "goals" ||
+    view === "more"
+  ) {
     return plan === undefined ? (
       <EmptyDashboard onStartBudgeting={() => setView("setup")} />
     ) : (
       <Dashboard
+        activeView={view}
         plan={plan}
         notificationAdapter={notificationAdapter}
         repository={repository}
         services={services}
         today={today}
+        onNavigate={setView}
         onPlanChange={setPlan}
         onOpenSimulator={() => setView("simulator")}
       />
@@ -159,6 +174,7 @@ export function App({
         services={services}
         today={today}
         onBack={() => setView("dashboard")}
+        onNavigate={setView}
         onPlanChange={setPlan}
       />
     );
@@ -712,22 +728,79 @@ function confirmStartNewBudget(onStartBudgeting: () => void): void {
   }
 }
 
+const budgetNavigationItems: readonly {
+  label: string;
+  view: BudgetWorkspaceView;
+}[] = [
+  { label: "Home", view: "dashboard" },
+  { label: "Bills", view: "bills" },
+  { label: "Goals", view: "goals" },
+  { label: "Simulator", view: "simulator" },
+  { label: "More", view: "more" },
+];
+
+interface BudgetNavigationProps {
+  activeView: BudgetWorkspaceView;
+  quickActionFormId?: string;
+  onNavigate: (view: BudgetWorkspaceView) => void;
+  onQuickAction?: () => void;
+}
+
+function BudgetNavigation({
+  activeView,
+  quickActionFormId,
+  onNavigate,
+  onQuickAction,
+}: BudgetNavigationProps) {
+  return (
+    <aside className="budget-navigation" aria-label="Budget workspace">
+      <nav className="budget-nav-links" aria-label="Primary budget navigation">
+        {budgetNavigationItems.map((item) => (
+          <button
+            aria-current={activeView === item.view ? "page" : undefined}
+            className="budget-nav-item"
+            key={item.view}
+            type="button"
+            onClick={() => onNavigate(item.view)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      <div className="budget-quick-actions" aria-label="Persistent quick actions">
+        <button
+          className="button button-primary"
+          form={quickActionFormId}
+          type={quickActionFormId === undefined ? "button" : "submit"}
+          onClick={quickActionFormId === undefined ? onQuickAction : undefined}
+        >
+          Log spending
+        </button>
+      </div>
+    </aside>
+  );
+}
+
 interface DashboardProps {
+  activeView: BudgetWorkspaceView;
   plan: BudgetPlan;
   notificationAdapter: BrowserNotificationAdapter;
   repository?: BudgetPlanRepository;
   services: ApplicationServices;
   today: DateOnly;
+  onNavigate: (view: BudgetWorkspaceView) => void;
   onPlanChange: (plan: BudgetPlan) => void;
   onOpenSimulator: () => void;
 }
 
 function Dashboard({
+  activeView,
   plan,
   notificationAdapter,
   repository,
   services,
   today,
+  onNavigate,
   onPlanChange,
   onOpenSimulator,
 }: DashboardProps) {
@@ -844,6 +917,12 @@ function Dashboard({
 
   return (
     <main className="app-shell dashboard-shell">
+      <BudgetNavigation
+        activeView={activeView}
+        quickActionFormId="log-spending-form"
+        onNavigate={onNavigate}
+      />
+
       <section className="dashboard-hero" aria-labelledby="dashboard-title">
         <p className="eyebrow">Your first result</p>
         <h1 id="dashboard-title">Safe to spend today</h1>
@@ -1306,6 +1385,7 @@ interface SimulatorProps {
   services: ApplicationServices;
   today: DateOnly;
   onBack: () => void;
+  onNavigate: (view: BudgetWorkspaceView) => void;
   onPlanChange: (plan: BudgetPlan) => void;
 }
 
@@ -1315,6 +1395,7 @@ function Simulator({
   services,
   today,
   onBack,
+  onNavigate,
   onPlanChange,
 }: SimulatorProps) {
   const money = (amount: Money) => formatMoney(amount, plan.currency);
@@ -1372,6 +1453,12 @@ function Simulator({
 
   return (
     <main className="app-shell dashboard-shell">
+      <BudgetNavigation
+        activeView="simulator"
+        onNavigate={onNavigate}
+        onQuickAction={() => onNavigate("dashboard")}
+      />
+
       <section className="dashboard-hero" aria-labelledby="simulator-title">
         <button className="text-button" type="button" onClick={onBack}>
           Back to dashboard
@@ -2429,108 +2516,109 @@ function SavingsGoalsPanel({
           Add a protected goal when you want savings reflected before spending.
         </p>
       ) : (
-        <div className="goal-list">
-          {plan.plannedRecords.savingsGoals.map((goal) => {
-            const allocation = allocations.find(
-              (candidate) => candidate.goalId === goal.id,
-            );
+        <>
+          <div className="goal-list">
+            {plan.plannedRecords.savingsGoals.map((goal) => {
+              const allocation = allocations.find(
+                (candidate) => candidate.goalId === goal.id,
+              );
 
-            return (
-              <article className="goal-row" key={goal.id}>
-                <div>
-                  <h3>{goal.name}</h3>
-                  <p>
-                    {goal.protected ? "Protected" : "Informational only"} - {goal.status}
-                  </p>
-                  {allocation === undefined ? null : (
-                    <dl className="mini-metrics">
-                      <div>
-                        <dt>Progress</dt>
-                        <dd>{money(allocation.progressAmount)}</dd>
-                      </div>
-                      <div>
-                        <dt>Remaining</dt>
-                        <dd>{money(allocation.remainingAmount)}</dd>
-                      </div>
-                      <div>
-                        <dt>Protected this period</dt>
-                        <dd>{money(allocation.remainingProtectedDeduction)}</dd>
-                      </div>
-                    </dl>
-                  )}
-                </div>
+              return (
+                <article className="goal-row" key={goal.id}>
+                  <div>
+                    <h3>{goal.name}</h3>
+                    <p>
+                      {goal.protected ? "Protected" : "Informational only"} - {goal.status}
+                    </p>
+                    {allocation === undefined ? null : (
+                      <dl className="mini-metrics">
+                        <div>
+                          <dt>Progress</dt>
+                          <dd>{money(allocation.progressAmount)}</dd>
+                        </div>
+                        <div>
+                          <dt>Remaining</dt>
+                          <dd>{money(allocation.remainingAmount)}</dd>
+                        </div>
+                        <div>
+                          <dt>Protected this period</dt>
+                          <dd>{money(allocation.remainingProtectedDeduction)}</dd>
+                        </div>
+                      </dl>
+                    )}
+                  </div>
 
-                <form className="workflow-form compact-form" onSubmit={saveGoal}>
-                  <input name="savings-goal-id" type="hidden" value={goal.id} />
-                  <label>
-                    Goal name
-                    <input name="goal-name" defaultValue={goal.name} required />
-                  </label>
-                  <label>
-                    Target amount
-                    <input
-                      inputMode="decimal"
-                      name="goal-target"
-                      defaultValue={moneyInputValue(goal.targetAmount, currency)}
-                      required
-                    />
-                  </label>
-                  <label>
-                    Current saved amount
-                    <input
-                      inputMode="decimal"
-                      name="goal-current"
-                      defaultValue={moneyInputValue(goal.currentAmount, currency)}
-                      required
-                    />
-                  </label>
-                  <label>
-                    Target date
-                    <input
-                      name="goal-target-date"
-                      type="date"
-                      defaultValue={goal.targetDate ?? ""}
-                    />
-                  </label>
-                  <label>
-                    Period contribution
-                    <input
-                      inputMode="decimal"
-                      name="goal-period-contribution"
-                      defaultValue={
-                        goal.periodContributionOverride === undefined
-                          ? ""
-                          : moneyInputValue(goal.periodContributionOverride, currency)
+                  <form className="workflow-form compact-form" onSubmit={saveGoal}>
+                    <input name="savings-goal-id" type="hidden" value={goal.id} />
+                    <label>
+                      Goal name
+                      <input name="goal-name" defaultValue={goal.name} required />
+                    </label>
+                    <label>
+                      Target amount
+                      <input
+                        inputMode="decimal"
+                        name="goal-target"
+                        defaultValue={moneyInputValue(goal.targetAmount, currency)}
+                        required
+                      />
+                    </label>
+                    <label>
+                      Current saved amount
+                      <input
+                        inputMode="decimal"
+                        name="goal-current"
+                        defaultValue={moneyInputValue(goal.currentAmount, currency)}
+                        required
+                      />
+                    </label>
+                    <label>
+                      Target date
+                      <input
+                        name="goal-target-date"
+                        type="date"
+                        defaultValue={goal.targetDate ?? ""}
+                      />
+                    </label>
+                    <label>
+                      Period contribution
+                      <input
+                        inputMode="decimal"
+                        name="goal-period-contribution"
+                        defaultValue={
+                          goal.periodContributionOverride === undefined
+                            ? ""
+                            : moneyInputValue(goal.periodContributionOverride, currency)
+                        }
+                      />
+                    </label>
+                    <label className="inline-choice">
+                      <input
+                        defaultChecked={goal.protected}
+                        name="goal-protected"
+                        type="checkbox"
+                      />
+                      Protected
+                    </label>
+                    <button className="button button-secondary" type="submit">
+                      Save goal changes
+                    </button>
+                  </form>
+
+                  <div className="action-row" aria-label={`${goal.name} status actions`}>
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      onClick={() =>
+                        setGoalStatus(
+                          goal.id,
+                          goal.status === "paused" ? "active" : "paused",
+                        )
                       }
-                    />
-                  </label>
-                  <label className="inline-choice">
-                    <input
-                      defaultChecked={goal.protected}
-                      name="goal-protected"
-                      type="checkbox"
-                    />
-                    Protected
-                  </label>
-                  <button className="button button-secondary" type="submit">
-                    Save goal changes
-                  </button>
-                </form>
-
-                <div className="action-row" aria-label={`${goal.name} status actions`}>
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() =>
-                      setGoalStatus(
-                        goal.id,
-                        goal.status === "paused" ? "active" : "paused",
-                      )
-                    }
-                  >
-                    {goal.status === "paused" ? "Resume goal" : "Pause goal"}
-                  </button>
-                  <button
+                    >
+                      {goal.status === "paused" ? "Resume goal" : "Pause goal"}
+                    </button>
+                    <button
                     className="button button-secondary"
                     type="button"
                     onClick={() => setGoalStatus(goal.id, "completed")}
@@ -2544,11 +2632,63 @@ function SavingsGoalsPanel({
                   >
                     Archive goal
                   </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+
+          <div className="chart-alternative">
+            <p>
+              <strong>Savings progress takeaway</strong>
+            </p>
+            {plan.plannedRecords.savingsGoals.slice(0, 1).map((goal) => {
+              const allocation = allocations.find(
+                (candidate) => candidate.goalId === goal.id,
+              );
+
+              return allocation === undefined ? null : (
+                <p key={goal.id}>
+                  {goal.name} has {money(allocation.progressAmount)} saved with{" "}
+                  {money(allocation.remainingAmount)} still to go.
+                </p>
+              );
+            })}
+            <table aria-label="Savings progress table">
+              <thead>
+                <tr>
+                  <th>Goal</th>
+                  <th>Saved</th>
+                  <th>Remaining</th>
+                  <th>Protected this period</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plan.plannedRecords.savingsGoals.map((goal) => {
+                  const allocation = allocations.find(
+                    (candidate) => candidate.goalId === goal.id,
+                  );
+
+                  return (
+                    <tr key={goal.id}>
+                      <td>{goal.name}</td>
+                      <td>{money(allocation?.progressAmount ?? goal.currentAmount)}</td>
+                      <td>
+                        {money(
+                          allocation?.remainingAmount ??
+                            Math.max(0, goal.targetAmount - goal.currentAmount),
+                        )}
+                      </td>
+                      <td>
+                        {money(allocation?.remainingProtectedDeduction ?? 0)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       <form
@@ -2679,6 +2819,60 @@ function CategoryGuidancePanel({
           );
         })}
       </div>
+
+      {plan.plannedRecords.categories.length === 0 ? null : (
+        <div className="chart-alternative">
+          <p>
+            <strong>Category guidance takeaway</strong>
+          </p>
+          {plan.plannedRecords.categories.slice(0, 1).map((category) => {
+            const summary = categorySummaries.find(
+              (candidate) => candidate.categoryId === category.id,
+            );
+            const spentAmount = summary?.spentAmount ?? 0;
+            const limit = summary?.periodLimit;
+
+            return (
+              <p key={category.id}>
+                {category.name} has used {money(spentAmount)}
+                {limit === undefined
+                  ? " with no guidance limit set."
+                  : ` of ${money(limit)} guidance.`}
+              </p>
+            );
+          })}
+          <table aria-label="Category guidance table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Spent</th>
+                <th>Guidance</th>
+                <th>Protected money?</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plan.plannedRecords.categories.map((category) => {
+                const summary = categorySummaries.find(
+                  (candidate) => candidate.categoryId === category.id,
+                );
+
+                return (
+                  <tr key={category.id}>
+                    <td>{category.name}</td>
+                    <td>{money(summary?.spentAmount ?? 0)}</td>
+                    <td>
+                      {summary?.periodLimit === undefined
+                        ? "No guidance set"
+                        : money(summary.periodLimit)}
+                    </td>
+                    <td>No</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <form
         className="workflow-form"

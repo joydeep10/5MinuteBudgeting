@@ -145,6 +145,33 @@ const plan = (
 });
 
 describe("dashboard home", () => {
+  it("presents the V1 product navigation while keeping spending as a quick action", () => {
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_navigation",
+              amount: money(80_000),
+            }),
+          ],
+        })}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain('aria-label="Primary budget navigation"');
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain(">Home<");
+    expect(html).toContain(">Bills<");
+    expect(html).toContain(">Goals<");
+    expect(html).toContain(">Simulator<");
+    expect(html).toContain(">More<");
+    expect(html).toContain('aria-label="Persistent quick actions"');
+    expect(html).toContain(">Log spending<");
+  });
+
   it("shows local-save reassurance, backup/import choices, and snapshot export messaging", () => {
     const html = renderToStaticMarkup(
       <App
@@ -841,5 +868,67 @@ describe("dashboard home", () => {
     expect(html).toContain("Pet care");
     expect(html).toContain("Add custom category");
     expect(html).toContain("Set guidance");
+  });
+
+  it("pairs visual savings and category guidance with plain-language takeaways and table equivalents", () => {
+    const food = category({
+      id: "category_food",
+      name: "Food",
+    });
+
+    const html = renderToStaticMarkup(
+      <App
+        initialView="dashboard"
+        initialPlan={plan({
+          balanceSnapshots: [
+            snapshot({
+              id: "snapshot_accessible_charts",
+              amount: money(100_000),
+            }),
+          ],
+          savingsGoals: [
+            goal({
+              id: "goal_emergency",
+              name: "Emergency fund",
+              targetAmount: money(60_000),
+              currentAmount: money(20_000),
+              periodContributionOverride: money(20_000),
+            }),
+          ],
+          categories: [food],
+          flexibleCategoryGuidance: [
+            guidance({
+              id: "guidance_food",
+              categoryId: food.id,
+              periodLimit: money(30_000),
+            }),
+          ],
+          financialEvents: [
+            event({
+              id: "spend_food",
+              amount: money(12_000),
+              categoryId: food.id,
+              note: undefined,
+            }),
+          ],
+        })}
+        today="2026-06-10"
+      />,
+    );
+
+    expect(html).toContain("Savings progress takeaway");
+    expect(html).toContain(
+      "Emergency fund has $200.00 saved with $400.00 still to go.",
+    );
+    expect(html).toContain('aria-label="Savings progress table"');
+    expect(html).toContain("<th>Goal</th>");
+    expect(html).toContain("<th>Saved</th>");
+    expect(html).toContain("<th>Remaining</th>");
+    expect(html).toContain("Category guidance takeaway");
+    expect(html).toContain("Food has used $120.00 of $300.00 guidance.");
+    expect(html).toContain('aria-label="Category guidance table"');
+    expect(html).toContain("<th>Category</th>");
+    expect(html).toContain("<th>Spent</th>");
+    expect(html).toContain("<th>Guidance</th>");
   });
 });
