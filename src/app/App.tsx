@@ -20,6 +20,10 @@ import {
   undoLastDailyActivity,
 } from "../features/dailyActions";
 import {
+  applyConfirmedSimulatorScenario,
+  previewSimulatorScenario,
+} from "../features/simulator";
+import {
   calculateCategorySummaries,
   calculateSafeToSpend,
   calculateSavingsGoalAllocations,
@@ -30,6 +34,7 @@ import type {
   BalanceSnapshot,
   BudgetMode,
   BudgetPlan,
+  BudgetSimulationScenario,
   BudgetWarning,
   CategorySummary,
   CommitmentOccurrence,
@@ -62,7 +67,7 @@ import type {
   NotificationPermissionStatus,
 } from "../infrastructure";
 
-export type AppView = "landing" | "setup" | "dashboard";
+export type AppView = "landing" | "setup" | "dashboard" | "simulator";
 
 export interface AppProps {
   hasSavedBudget?: boolean;
@@ -129,6 +134,22 @@ export function App({
         repository={repository}
         services={services}
         today={today}
+        onPlanChange={setPlan}
+        onOpenSimulator={() => setView("simulator")}
+      />
+    );
+  }
+
+  if (view === "simulator") {
+    return plan === undefined ? (
+      <EmptyDashboard onStartBudgeting={() => setView("setup")} />
+    ) : (
+      <Simulator
+        plan={plan}
+        repository={repository}
+        services={services}
+        today={today}
+        onBack={() => setView("dashboard")}
         onPlanChange={setPlan}
       />
     );
@@ -689,6 +710,7 @@ interface DashboardProps {
   services: ApplicationServices;
   today: DateOnly;
   onPlanChange: (plan: BudgetPlan) => void;
+  onOpenSimulator: () => void;
 }
 
 function Dashboard({
@@ -698,6 +720,7 @@ function Dashboard({
   services,
   today,
   onPlanChange,
+  onOpenSimulator,
 }: DashboardProps) {
   const [workflowMessage, setWorkflowMessage] = useState<string | undefined>();
   const result = calculateSafeToSpend({ plan, today });
@@ -808,6 +831,15 @@ function Dashboard({
         <p className="eyebrow">Your first result</p>
         <h1 id="dashboard-title">Safe to spend today</h1>
         <p className="money-hero">{money(result.confirmed.safeToday)}</p>
+        <div className="hero-actions">
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={onOpenSimulator}
+          >
+            Simulator
+          </button>
+        </div>
         <div className="result-grid" aria-label="Budget runway">
           <article>
             <p>Safe this week</p>
@@ -1033,6 +1065,298 @@ function Dashboard({
       )}
     </main>
   );
+}
+
+interface SimulatorProps {
+  plan: BudgetPlan;
+  repository?: BudgetPlanRepository;
+  services: ApplicationServices;
+  today: DateOnly;
+  onBack: () => void;
+  onPlanChange: (plan: BudgetPlan) => void;
+}
+
+function Simulator({
+  plan,
+  repository,
+  services,
+  today,
+  onBack,
+  onPlanChange,
+}: SimulatorProps) {
+  const money = (amount: Money) => formatMoney(amount, plan.currency);
+  const [scenarioKind, setScenarioKind] =
+    useState<SimulatorScenarioKind>("spend-extra");
+  const [message, setMessage] = useState<string | undefined>();
+  const scenario = defaultSimulatorScenario(plan, today, scenarioKind);
+  const simulation = previewSimulatorScenario({
+    plan,
+    today,
+    scenario,
+  });
+  const warningChange =
+    simulation.simulated.warnings.length - simulation.current.warnings.length;
+
+  async function applyScenario() {
+    if (repository === undefined) {
+      setMessage("Budget storage is not ready. Try again in a moment.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Apply this simulator scenario to your real budget?",
+    );
+
+    if (!confirmed) {
+      setMessage("Scenario cancelled. Your budget was not changed.");
+      return;
+    }
+
+    try {
+      const completion = await applyConfirmedSimulatorScenario(
+        {
+          plan,
+          today,
+          scenario,
+          confirmed,
+        },
+        {
+          repository,
+          services,
+        },
+      );
+
+      onPlanChange(completion.plan);
+      setMessage("Scenario applied to your budget.");
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Scenario could not be applied.",
+      );
+    }
+  }
+
+  return (
+    <main className="app-shell dashboard-shell">
+      <section className="dashboard-hero" aria-labelledby="simulator-title">
+        <button className="text-button" type="button" onClick={onBack}>
+          Back to dashboard
+        </button>
+        <p className="eyebrow">Safe exploration</p>
+        <h1 id="simulator-title">What-if simulator</h1>
+        <p className="hero-lede">
+          Try a decision and compare the result. No budget data changes until you apply.
+        </p>
+      </section>
+
+      <section className="workflow-panel" aria-labelledby="simulator-options-title">
+        <div className="workflow-heading">
+          <p className="section-kicker">Scenario cards</p>
+          <h2 id="simulator-options-title">Choose a guided what-if</h2>
+        </div>
+        <div className="scenario-grid">
+          <button
+            className={scenarioCardClass(scenarioKind === "spend-extra")}
+            type="button"
+            onClick={() => setScenarioKind("spend-extra")}
+          >
+            <span>Spend extra</span>
+            <strong>What if I spend $25 today?</strong>
+          </button>
+          <button
+            className={scenarioCardClass(scenarioKind === "change-bill")}
+            type="button"
+            onClick={() => setScenarioKind("change-bill")}
+          >
+            <span>Change a bill</span>
+            <strong>What if a bill is $25 higher?</strong>
+          </button>
+          <button
+            className={scenarioCardClass(scenarioKind === "change-buffer")}
+            type="button"
+            onClick={() => setScenarioKind("change-buffer")}
+          >
+            <span>Change buffer</span>
+            <strong>What if I raise my buffer by $25?</strong>
+          </button>
+          <button
+            className={scenarioCardClass(scenarioKind === "adjust-savings")}
+            type="button"
+            onClick={() => setScenarioKind("adjust-savings")}
+          >
+            <span>Adjust a savings goal</span>
+            <strong>What if this goal is paused for now?</strong>
+          </button>
+        </div>
+      </section>
+
+      <section className="dashboard-breakdown" aria-labelledby="simulator-impact-title">
+        <p className="section-kicker">Before and after</p>
+        <h2 id="simulator-impact-title">Safe-to-spend impact</h2>
+        <div className="result-grid simulator-impact-grid">
+          <article>
+            <p>Before</p>
+            <strong>{money(simulation.current.confirmed.safeToday)}</strong>
+          </article>
+          <article>
+            <p>After</p>
+            <strong>{money(simulation.simulated.confirmed.safeToday)}</strong>
+          </article>
+          <article>
+            <p>Safe this period</p>
+            <strong>{money(simulation.current.confirmed.safeThisPeriod)}</strong>
+          </article>
+          <article>
+            <p>After safe this period</p>
+            <strong>{money(simulation.simulated.confirmed.safeThisPeriod)}</strong>
+          </article>
+        </div>
+        <p className="breakdown-note">
+          This preview uses the same simulator and safe-to-spend calculator as your real budget.
+        </p>
+        <p className="breakdown-note">
+          Warning change: {warningChange >= 0 ? "+" : ""}
+          {warningChange}
+        </p>
+        <div className="warning-list" aria-label="Simulator warning comparison">
+          <article className="warning-card">
+            <h3>Current warnings</h3>
+            <p>{simulatorWarningSummary(simulation.current.warnings, plan.currency)}</p>
+          </article>
+          <article className="warning-card">
+            <h3>Simulated warnings</h3>
+            <p>{simulatorWarningSummary(simulation.simulated.warnings, plan.currency)}</p>
+          </article>
+        </div>
+      </section>
+
+      <section className="workflow-panel" aria-labelledby="simulator-apply-title">
+        <div className="workflow-heading">
+          <p className="section-kicker">Apply safely</p>
+          <h2 id="simulator-apply-title">Confirm before changing your budget</h2>
+          <p>
+            Applying writes this scenario into the real BudgetPlan. Cancel and return leaves the saved budget unchanged.
+          </p>
+        </div>
+        {message === undefined ? null : (
+          <p className="validation-message" role="status">
+            {message}
+          </p>
+        )}
+        <div className="action-row">
+          <button
+            className="button button-primary"
+            type="button"
+            onClick={() => void applyScenario()}
+          >
+            Apply scenario
+          </button>
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={onBack}
+          >
+            Cancel and return
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+type SimulatorScenarioKind =
+  | "spend-extra"
+  | "change-bill"
+  | "change-buffer"
+  | "adjust-savings";
+
+function defaultSimulatorScenario(
+  plan: BudgetPlan,
+  today: DateOnly,
+  scenarioKind: SimulatorScenarioKind,
+): BudgetSimulationScenario {
+  if (scenarioKind === "change-bill") {
+    const commitment = plan.plannedRecords.commitmentTemplates[0];
+
+    if (commitment !== undefined) {
+      return {
+        kind: "commitment-change",
+        commitmentTemplateId: commitment.id,
+        changes: {
+          amount: commitment.amount + 2_500,
+        },
+      };
+    }
+
+    return {
+      kind: "commitment-add",
+      commitment: {
+        id: "scenario_bill",
+        createdAt: "simulation",
+        updatedAt: "simulation",
+        name: "Possible bill",
+        kind: "bill",
+        amount: 2_500,
+        active: true,
+        startsOn: today,
+        recurrence: {
+          frequency: "one-time",
+          interval: 1,
+          anchorDate: today,
+        },
+      },
+    };
+  }
+
+  if (scenarioKind === "change-buffer") {
+    return {
+      kind: "buffer-change",
+      fixedBuffer: plan.fixedBuffer + 2_500,
+    };
+  }
+
+  if (scenarioKind === "adjust-savings") {
+    const savingsGoal = plan.plannedRecords.savingsGoals[0];
+
+    if (savingsGoal !== undefined) {
+      return {
+        kind: "savings-goal-change",
+        savingsGoalId: savingsGoal.id,
+        status: "paused",
+      };
+    }
+
+    return {
+      kind: "buffer-change",
+      fixedBuffer: Math.max(0, plan.fixedBuffer - 2_500),
+    };
+  }
+
+  return {
+    kind: "one-time-spend",
+    id: "scenario_extra_spend",
+    date: today,
+    amount: 2_500,
+    note: "What-if extra spending",
+  };
+}
+
+function scenarioCardClass(selected: boolean): string {
+  return selected ? "scenario-card scenario-card-selected" : "scenario-card";
+}
+
+function simulatorWarningSummary(
+  warnings: readonly BudgetWarning[],
+  currency: CurrencyMetadata,
+): string {
+  if (warnings.length === 0) {
+    return "No warnings for this result.";
+  }
+
+  return warnings
+    .map((warning) => budgetWarningCopy(warning, currency).headline)
+    .join(", ");
 }
 
 interface PeriodRolloverPanelProps {
