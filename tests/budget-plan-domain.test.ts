@@ -120,7 +120,14 @@ describe("BudgetPlan domain model", () => {
       id: "budget_june",
       createdAt: timestamp("2026-06-19T08:00:00.000Z"),
       updatedAt: timestamp("2026-06-19T08:06:00.000Z"),
-      mode: "fixed-income",
+      budgetingStyle: "regular-paycheck",
+      incomeSchedule: { kind: "unconfigured" },
+      carriedForwardMoney: { amount: money(0) },
+      independentBufferTracker: {
+        enabled: false,
+        startingAmount: money(0),
+        spendingRecords: [],
+      },
       currency: usd,
       activePeriod: {
         startDate: dateOnly("2026-06-19"),
@@ -139,7 +146,7 @@ describe("BudgetPlan domain model", () => {
     };
 
     expect(plan.currency).toEqual(usd);
-    expect(plan.schemaVersion).toBe(1);
+    expect(plan.schemaVersion).toBe(budgetPlanSchemaVersion);
     expect(plan.plannedRecords.commitmentTemplates[0]?.amount).toBe(120_000);
     expect(plan.financialEvents[0]?.kind).toBe("spending");
   });
