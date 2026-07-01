@@ -23,6 +23,17 @@ export interface BudgetPlanRepository {
   loadActivePlan: () => Promise<BudgetPlan | undefined>;
 }
 
+export class BudgetPlanMigrationError extends Error {
+  override readonly name = "BudgetPlanMigrationError";
+
+  constructor(
+    message: string,
+    readonly cause?: unknown,
+  ) {
+    super(message);
+  }
+}
+
 export type NotificationPermissionStatus =
   | "granted"
   | "denied"
@@ -90,6 +101,26 @@ export function createBudgetPlanRepository({
 
       if (envelope === undefined) {
         return undefined;
+      }
+
+      if (envelope.schemaVersion === 1) {
+        const migratedPlan = migrateSchemaVersionOne(envelope.plan);
+
+        try {
+          await store.write({
+            key: activeBudgetPlanStorageKey,
+            schemaVersion: budgetPlanSchemaVersion,
+            savedAt: now(),
+            plan: cloneBudgetPlan(migratedPlan),
+          });
+        } catch (error) {
+          throw new BudgetPlanMigrationError(
+            "The migrated BudgetPlan could not be saved; the original data remains available.",
+            error,
+          );
+        }
+
+        return cloneBudgetPlan(migratedPlan);
       }
 
       assertSupportedStoredEnvelope(envelope);
@@ -540,7 +571,10 @@ function isBudgetPlan(value: unknown): value is BudgetPlan {
     typeof value.id === "string" &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
-    isBudgetMode(value.mode) &&
+    isBudgetingStyle(value.budgetingStyle) &&
+    isIncomeSchedule(value.incomeSchedule) &&
+    isCarriedForwardMoney(value.carriedForwardMoney) &&
+    isIndependentBufferTracker(value.independentBufferTracker) &&
     isCurrency(value.currency) &&
     isActivePeriod(value.activePeriod) &&
     typeof value.fixedBuffer === "number" &&
@@ -553,11 +587,172 @@ function isBudgetPlan(value: unknown): value is BudgetPlan {
   );
 }
 
-function isBudgetMode(value: unknown): boolean {
+function isBudgetingStyle(value: unknown): boolean {
+  return (
+    value === "regular-paycheck" ||
+    value === "irregular-income" ||
+    value === "general-budget"
+  );
+}
+
+type SchemaVersionOneBudgetPlan = Omit<
+  BudgetPlan,
+  | "schemaVersion"
+  | "budgetingStyle"
+  | "incomeSchedule"
+  | "carriedForwardMoney"
+  | "independentBufferTracker"
+> & {
+  schemaVersion: 1;
+  mode: "fixed-income" | "irregular-income" | "general";
+};
+
+function migrateSchemaVersionOne(plan: unknown): BudgetPlan {
+  if (!isSchemaVersionOneBudgetPlan(plan)) {
+    throw new BudgetPlanMigrationError(
+      "Stored schema-v1 data must contain a valid BudgetPlan.",
+    );
+  }
+
+  const { mode, ...preservedPlan } = plan;
+
+  return {
+    ...preservedPlan,
+    schemaVersion: budgetPlanSchemaVersion,
+    budgetingStyle: budgetingStyleForLegacyMode(mode),
+    incomeSchedule: { kind: "unconfigured" },
+    carriedForwardMoney: { amount: 0 },
+    independentBufferTracker: {
+      enabled: false,
+      startingAmount: 0,
+      spendingRecords: [],
+    },
+  };
+}
+
+function budgetingStyleForLegacyMode(
+  mode: "fixed-income" | "irregular-income" | "general",
+): BudgetPlan["budgetingStyle"] {
+  if (mode === "fixed-income") {
+    return "regular-paycheck";
+  }
+
+  return mode === "general" ? "general-budget" : mode;
+}
+
+function isSchemaVersionOneBudgetPlan(
+  value: unknown,
+): value is SchemaVersionOneBudgetPlan {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    value.schemaVersion === 1 &&
+    isPersistedRecord(value) &&
+    isLegacyBudgetMode(value.mode) &&
+    isCurrency(value.currency) &&
+    isActivePeriod(value.activePeriod) &&
+    typeof value.fixedBuffer === "number" &&
+    isPlannedRecords(value.plannedRecords) &&
+    Array.isArray(value.balanceSnapshots) &&
+    Array.isArray(value.financialEvents) &&
+    (value.periodSnapshots === undefined || Array.isArray(value.periodSnapshots)) &&
+    (value.reminderPreferences === undefined ||
+      isReminderPreferences(value.reminderPreferences))
+  );
+}
+
+function isLegacyBudgetMode(value: unknown): boolean {
   return (
     value === "fixed-income" ||
     value === "irregular-income" ||
     value === "general"
+  );
+}
+
+function isIncomeSchedule(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (value.kind === "unconfigured" || value.kind === "none") {
+    return true;
+  }
+
+  if (value.kind === "regular-paycheck") {
+    return (
+      isIncomeScheduleCadence(value.cadence) &&
+      typeof value.nextPayday === "string" &&
+      (value.customPaydays === undefined ||
+        (Array.isArray(value.customPaydays) &&
+          value.customPaydays.every((date) => typeof date === "string")))
+    );
+  }
+
+  return (
+    value.kind === "irregular-income" &&
+    Array.isArray(value.expectedPayments) &&
+    value.expectedPayments.every(isExpectedIncomePayment)
+  );
+}
+
+function isIncomeScheduleCadence(value: unknown): boolean {
+  return (
+    value === "weekly" ||
+    value === "biweekly" ||
+    value === "twice-monthly" ||
+    value === "monthly" ||
+    value === "custom"
+  );
+}
+
+function isExpectedIncomePayment(value: unknown): boolean {
+  return (
+    isPersistedRecord(value) &&
+    typeof value.source === "string" &&
+    typeof value.amount === "number" &&
+    typeof value.expectedDate === "string" &&
+    (value.confidence === "low" ||
+      value.confidence === "medium" ||
+      value.confidence === "high")
+  );
+}
+
+function isCarriedForwardMoney(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.amount === "number" &&
+    (value.sourcePeriod === undefined || isActivePeriod(value.sourcePeriod))
+  );
+}
+
+function isIndependentBufferTracker(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.enabled === "boolean" &&
+    typeof value.startingAmount === "number" &&
+    Array.isArray(value.spendingRecords) &&
+    value.spendingRecords.every(isBufferSpendingRecord)
+  );
+}
+
+function isBufferSpendingRecord(value: unknown): boolean {
+  return (
+    isPersistedRecord(value) &&
+    typeof value.date === "string" &&
+    typeof value.amount === "number" &&
+    (value.category === undefined || typeof value.category === "string") &&
+    (value.note === undefined || typeof value.note === "string")
+  );
+}
+
+function isPersistedRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
   );
 }
 

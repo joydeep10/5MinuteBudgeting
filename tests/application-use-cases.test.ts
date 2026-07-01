@@ -57,11 +57,18 @@ describe("application BudgetPlan use cases", () => {
     );
 
     expect(plan).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: "budget_1",
       createdAt: "2026-06-22T10:00:00.000Z",
       updatedAt: "2026-06-22T10:00:00.000Z",
-      mode: "general",
+      budgetingStyle: "general-budget",
+      incomeSchedule: { kind: "unconfigured" },
+      carriedForwardMoney: { amount: 0 },
+      independentBufferTracker: {
+        enabled: false,
+        startingAmount: 0,
+        spendingRecords: [],
+      },
       fixedBuffer: 20_000,
       activePeriod: {
         startDate: "2026-06-22",

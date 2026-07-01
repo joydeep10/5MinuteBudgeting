@@ -22,7 +22,14 @@ export const representativeBudgetPlan = {
   id: "budget_typecheck",
   createdAt: timestamp("2026-06-19T08:00:00.000Z"),
   updatedAt: timestamp("2026-06-19T08:00:00.000Z"),
-  mode: "general",
+  budgetingStyle: "general-budget",
+  incomeSchedule: { kind: "none" },
+  carriedForwardMoney: { amount: money(0) },
+  independentBufferTracker: {
+    enabled: false,
+    startingAmount: money(0),
+    spendingRecords: [],
+  },
   currency: usd,
   activePeriod: {
     startDate: dateOnly("2026-06-19"),

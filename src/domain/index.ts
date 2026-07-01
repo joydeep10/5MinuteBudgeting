@@ -1,4 +1,4 @@
-export const budgetPlanSchemaVersion = 1 as const;
+export const budgetPlanSchemaVersion = 2 as const;
 
 export type BudgetPlanSchemaVersion = typeof budgetPlanSchemaVersion;
 export type EntityId = string;
@@ -20,6 +20,53 @@ export interface PersistedRecord {
 }
 
 export type BudgetMode = "fixed-income" | "irregular-income" | "general";
+
+export type BudgetingStyle =
+  | "regular-paycheck"
+  | "irregular-income"
+  | "general-budget";
+
+export type IncomeScheduleCadence =
+  | "weekly"
+  | "biweekly"
+  | "twice-monthly"
+  | "monthly"
+  | "custom";
+
+export interface UnconfiguredIncomeSchedule {
+  kind: "unconfigured";
+}
+
+export interface NoIncomeSchedule {
+  kind: "none";
+}
+
+export interface RegularPaycheckIncomeSchedule {
+  kind: "regular-paycheck";
+  cadence: IncomeScheduleCadence;
+  nextPayday: DateOnly;
+  customPaydays?: readonly DateOnly[];
+}
+
+export type ExpectedIncomeConfidence = "low" | "medium" | "high";
+
+export interface ExpectedIncomePayment extends PersistedRecord {
+  source: string;
+  amount: Money;
+  expectedDate: DateOnly;
+  confidence: ExpectedIncomeConfidence;
+}
+
+export interface IrregularIncomeSchedule {
+  kind: "irregular-income";
+  expectedPayments: readonly ExpectedIncomePayment[];
+}
+
+export type IncomeSchedule =
+  | UnconfiguredIncomeSchedule
+  | NoIncomeSchedule
+  | RegularPaycheckIncomeSchedule
+  | IrregularIncomeSchedule;
 
 export interface ActiveBudgetPeriod {
   startDate: DateOnly;
@@ -209,9 +256,30 @@ export interface ReminderPreferences {
   browserNotificationsEnabled: boolean;
 }
 
+export interface CarriedForwardMoney {
+  amount: Money;
+  sourcePeriod?: ActiveBudgetPeriod;
+}
+
+export interface BufferSpendingRecord extends PersistedRecord {
+  date: DateOnly;
+  amount: Money;
+  category?: string;
+  note?: string;
+}
+
+export interface IndependentBufferTracker {
+  enabled: boolean;
+  startingAmount: Money;
+  spendingRecords: readonly BufferSpendingRecord[];
+}
+
 export interface BudgetPlan extends PersistedRecord {
   schemaVersion: BudgetPlanSchemaVersion;
-  mode: BudgetMode;
+  budgetingStyle: BudgetingStyle;
+  incomeSchedule: IncomeSchedule;
+  carriedForwardMoney: CarriedForwardMoney;
+  independentBufferTracker: IndependentBufferTracker;
   currency: CurrencyMetadata;
   activePeriod: ActiveBudgetPeriod;
   fixedBuffer: Money;

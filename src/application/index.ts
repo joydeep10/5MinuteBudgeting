@@ -225,7 +225,14 @@ export function createBudgetPlan(
     id: planId,
     createdAt: timestamp,
     updatedAt: timestamp,
-    mode: input.mode,
+    budgetingStyle: budgetingStyleForMode(input.mode),
+    incomeSchedule: { kind: "unconfigured" },
+    carriedForwardMoney: { amount: 0 },
+    independentBufferTracker: {
+      enabled: false,
+      startingAmount: 0,
+      spendingRecords: [],
+    },
     currency: { ...input.currency },
     activePeriod: { ...input.activePeriod },
     fixedBuffer: input.fixedBuffer,
@@ -248,6 +255,14 @@ export function createBudgetPlan(
     ],
     financialEvents: [],
   };
+}
+
+function budgetingStyleForMode(mode: BudgetMode): BudgetPlan["budgetingStyle"] {
+  if (mode === "fixed-income") {
+    return "regular-paycheck";
+  }
+
+  return mode === "general" ? "general-budget" : mode;
 }
 
 export function recordBalanceSnapshot(

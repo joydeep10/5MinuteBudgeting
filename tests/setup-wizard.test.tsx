@@ -67,7 +67,8 @@ describe("first-use setup wizard", () => {
 
     expect(savedPlans).toHaveLength(1);
     expect(savedPlans[0]).toMatchObject({
-      mode: "fixed-income",
+      budgetingStyle: "regular-paycheck",
+      incomeSchedule: { kind: "unconfigured" },
       currency: {
         code: "USD",
         decimalPlaces: 2,
